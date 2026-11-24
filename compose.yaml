@@ -1,0 +1,32 @@
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_ORIGIN: https://${PARTYUP_DOMAIN:?Set PARTYUP_DOMAIN in .env}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      DEMO_MODE: 'false'
+    volumes:
+      - partyup_data:/app/data
+      - ./secrets:/run/secrets:ro
+    ports:
+      - '127.0.0.1:3001:3001'
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      PARTYUP_DOMAIN: ${PARTYUP_DOMAIN}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+volumes:
+  partyup_data:
+  caddy_data:
+  caddy_config:

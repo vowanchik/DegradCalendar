@@ -1,0 +1,9 @@
+node_modules
+dist
+release
+data
+android
+ios
+public/assets
+pnpm-lock.yaml
+test-results

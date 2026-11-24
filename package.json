@@ -1,0 +1,67 @@
+{
+  "name": "partyup",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "description": "Игровые вечера с друзьями — Windows, Android, iOS",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:desktop": "node scripts/dev.mjs --desktop",
+    "server": "node --env-file-if-exists=.env server/index.mjs",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test tests/*.test.mjs",
+    "desktop": "electron .",
+    "package:win": "pnpm build && electron-builder --win portable",
+    "mobile:android": "pnpm build && node scripts/native-setup.mjs android",
+    "mobile:ios": "pnpm build && node scripts/native-setup.mjs ios",
+    "native:setup": "node scripts/native-setup.mjs"
+  },
+  "dependencies": {
+    "@capacitor-firebase/messaging": "^8.0.0",
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/ios": "^8.0.0",
+    "firebase-admin": "^13.0.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.0.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.0.0",
+    "prettier": "^3.10.1",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0"
+  },
+  "build": {
+    "appId": "com.partyup.app",
+    "productName": "PartyUp",
+    "files": [
+      "dist/**/*",
+      "desktop/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "npmRebuild": false,
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "portable",
+      "icon": "public/assets/logo.png",
+      "artifactName": "PartyUp-${version}-Windows.${ext}"
+    }
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "packageManager": "pnpm@11.25.0"
+}
