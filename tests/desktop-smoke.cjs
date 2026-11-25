@@ -76,9 +76,22 @@ app
     const config = {
       scope: `${origin}:fixture-user`,
       zone: 'Europe/Moscow',
-      preferences: { theme: 'ocean', widgetEnabled: true, sounds: {} },
+      preferences: {
+        theme: 'ocean',
+        widgetEnabled: true,
+        hideInactive: true,
+        zoom: 125,
+        sounds: {},
+      },
     };
     await invoke('configure', config);
+    assert.equal(main.webContents.getZoomFactor(), 1.25);
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(profile, 'desktop.json'), 'utf8'))[config.scope]
+        .preferences.hideInactive,
+      true,
+    );
+    console.log('PASS: UI zoom is applied and calendar filter is preserved in desktop preferences');
     await waitFor(() =>
       BrowserWindow.getAllWindows().some(
         (window) => window !== main && window.getTitle() === 'Календарь PartyUp',
@@ -93,6 +106,7 @@ app
       else resolve();
     });
     const snapshot = await widget.webContents.executeJavaScript('window.partyupWidget.getState()');
+    assert.equal(widget.webContents.getZoomFactor(), 1);
     assert.equal(snapshot.events[0].id, event.id);
     assert.equal(snapshot.theme, 'ocean');
     assert.equal(snapshot.zone, 'Europe/Moscow');
@@ -151,6 +165,8 @@ app
       async () => (await main.webContents.executeJavaScript('window.qaOpened')) === event.id,
     );
     console.log('PASS: widget opens the selected invitation in the main window');
+    await invoke('disconnect');
+    assert.equal(main.webContents.getZoomFactor(), 1);
     app.exit(0);
   })
   .catch((error) => {

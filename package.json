@@ -1,6 +1,6 @@
 {
   "name": "partyup",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Игровые вечера с друзьями — Windows, Android, iOS",
@@ -12,6 +12,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "node --test tests/*.test.mjs",
     "test:desktop": "electron tests/desktop-smoke.cjs",
+    "test:ui": "node tests/ui-smoke.mjs",
     "desktop": "electron .",
     "package:win": "pnpm build && electron-builder --win portable",
     "mobile:android": "pnpm build && node scripts/native-setup.mjs android",

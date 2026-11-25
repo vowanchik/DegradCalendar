@@ -22,7 +22,7 @@ export function Widget() {
     document.body.classList.add('widget-body');
   }, [state.theme]);
   const events = state.events.filter(
-    (e) => !e.cancelled && e.my_status !== 'declined' && Date.parse(e.ends_at) > Date.now(),
+    (e) => !e.cancelled && e.my_status !== 'declined' && Date.parse(e.starts_at) > Date.now(),
   );
   const selected = events.filter((e) => dateKey(e.starts_at, state.zone) === day);
   function select(value: string) {

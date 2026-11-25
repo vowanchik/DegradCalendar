@@ -191,6 +191,7 @@ function updateWidget() {
       icon: iconPath,
       webPreferences: {
         preload: path.join(__dirname, 'widget-preload.cjs'),
+        partition: 'partyup-widget',
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
@@ -354,6 +355,7 @@ async function poll(baseline = false) {
   }
 }
 function disconnect() {
+  if (window && !window.isDestroyed()) window.webContents.setZoomFactor(1);
   generation++;
   connection = null;
   configuration = null;
@@ -414,6 +416,8 @@ ipcMain.handle('configure', (event, data) => {
     preferences: {
       theme: prefs.theme,
       widgetEnabled: prefs.widgetEnabled,
+      hideInactive: prefs.hideInactive === true,
+      zoom: [100, 110, 125, 150, 175, 200].includes(prefs.zoom) ? prefs.zoom : 100,
       sounds: prefs.sounds || {},
     },
   };
@@ -423,6 +427,7 @@ ipcMain.handle('configure', (event, data) => {
     preferences: configuration.preferences,
   };
   persist();
+  window.webContents.setZoomFactor(configuration.preferences.zoom / 100);
   updateWidget();
 });
 ipcMain.handle('sound:set', async (event, data) => {

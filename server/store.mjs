@@ -25,6 +25,21 @@ export function createStore(directory) {
     CREATE INDEX IF NOT EXISTS messages_event ON messages(event_id,created_at);
     CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
   `);
+  // Additive migrations keep existing accounts, meetings, and sessions intact.
+  if (
+    !db
+      .prepare('PRAGMA table_info(users)')
+      .all()
+      .some((c) => c.name === 'avatar')
+  )
+    db.exec("ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''");
+  if (
+    !db
+      .prepare('PRAGMA table_info(events)')
+      .all()
+      .some((c) => c.name === 'steam_app_id')
+  )
+    db.exec('ALTER TABLE events ADD COLUMN steam_app_id INTEGER');
   const get = (sql, ...params) => db.prepare(sql).get(...params);
   const all = (sql, ...params) => db.prepare(sql).all(...params);
   const run = (sql, ...params) => db.prepare(sql).run(...params);

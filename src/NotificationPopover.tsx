@@ -1,4 +1,4 @@
-import { Bell, CheckCheck, MessageCircle, Users, X, CircleX } from 'lucide-react';
+import { Bell, CheckCheck, MessageCircle, Users, X, CircleX, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { formatDate, formatTime } from './time';
@@ -22,6 +22,7 @@ export function NotificationPopover({
   toast(message: string): void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const unread = unreadCount;
   useEffect(() => {
@@ -34,6 +35,18 @@ export function NotificationPopover({
       await onRead();
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Не удалось прочитать уведомление');
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function clear() {
+    setBusy(true);
+    try {
+      await api('/api/notifications/clear', {});
+      await onRead();
+      setConfirmClear(false);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Не удалось очистить уведомления');
     } finally {
       setBusy(false);
     }
@@ -60,6 +73,33 @@ export function NotificationPopover({
           <CheckCheck size={16} /> Прочитать все
         </button>
       </div>
+      {notices.length > 0 && (
+        <div className="notice-clear">
+          {confirmClear ? (
+            <>
+              <span>Удалить все уведомления?</span>
+              <button
+                className="text-button danger-text"
+                disabled={busy}
+                onClick={() => void clear()}
+              >
+                Удалить все
+              </button>
+              <button
+                className="text-button"
+                disabled={busy}
+                onClick={() => setConfirmClear(false)}
+              >
+                Отмена
+              </button>
+            </>
+          ) : (
+            <button className="text-button" disabled={busy} onClick={() => setConfirmClear(true)}>
+              <Trash2 size={16} /> Очистить список
+            </button>
+          )}
+        </div>
+      )}
       <div className="notices">
         {notices.length ? (
           notices.map((n) => (

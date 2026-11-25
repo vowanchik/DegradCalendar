@@ -4,6 +4,7 @@ export type Person = {
   username?: string;
   color: string;
   friend_code?: string;
+  avatar?: string;
 };
 export type Participant = Person & { status: 'accepted' | 'pending' | 'declined' };
 export type GameEvent = {
@@ -12,6 +13,7 @@ export type GameEvent = {
   host_name: string;
   title: string;
   game: string;
+  steam_app_id?: number | null;
   starts_at: string;
   ends_at: string;
   timezone: string;
@@ -49,6 +51,8 @@ export type SoundChoice = { name: string; channelId?: string; soundName?: string
 export type DevicePreferences = {
   theme: 'forest' | 'ocean' | 'violet' | 'light';
   widgetEnabled: boolean;
+  hideInactive: boolean;
+  zoom: number;
   sounds: Partial<Record<SoundKind, SoundChoice>>;
 };
 export type WidgetState = {
@@ -62,6 +66,7 @@ export type Message = {
   user_id: string;
   name: string;
   color: string;
+  avatar?: string;
   text: string;
   created_at: string;
 };

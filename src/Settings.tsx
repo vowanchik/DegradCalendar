@@ -16,6 +16,7 @@ import { disablePush, enablePush, syncPushSounds } from './integrations';
 import { preferenceScope, soundKinds } from './preferences';
 import { zones } from './time';
 import type { AppState, DevicePreferences, SoundKind } from './types';
+import { ProfileEditor } from './ProfileEditor';
 
 function Toggle({
   label,
@@ -152,7 +153,7 @@ export function Settings({
       </div>
       <div className="settings-profile panel">
         <span className="avatar" style={{ background: data.user.color, color: '#162019' }}>
-          {data.user.name.slice(0, 1)}
+          {data.user.avatar ? <img src={data.user.avatar} alt="" /> : data.user.name.slice(0, 1)}
         </span>
         <div>
           <strong>{data.user.name}</strong>
@@ -163,6 +164,27 @@ export function Settings({
         </button>
       </div>
       <div className="settings-list">
+        <ProfileEditor user={data.user} refresh={refresh} toast={toast} />
+        <section className="panel settings-section">
+          <h2>Масштаб интерфейса</h2>
+          <label className="setting-control">
+            Размер текста и элементов
+            <select
+              aria-label="Масштаб интерфейса"
+              value={preferences.zoom}
+              onChange={(event) =>
+                setPreferences({ ...preferences, zoom: Number(event.target.value) })
+              }
+            >
+              {[100, 110, 125, 150, 175, 200].map((zoom) => (
+                <option key={zoom} value={zoom}>
+                  {zoom}%
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="field-hint">Сохраняется для этого аккаунта на устройстве.</p>
+        </section>
         <section className="panel settings-section">
           <div className="settings-section-heading">
             <Palette />

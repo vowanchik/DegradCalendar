@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { randomBytes, randomUUID, createHash, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { createStore } from './store.mjs';
+import { createSteamSearch } from './steam.mjs';
 const derive = promisify(scrypt);
 const iso = () => new Date().toISOString();
 const hash = (token) => createHash('sha256').update(token).digest('hex');
@@ -32,11 +33,37 @@ function timezone(value) {
   }
   return value;
 }
+function startTime(value) {
+  const start = typeof value === 'string' ? new Date(value) : new Date(NaN);
+  if (
+    !Number.isFinite(start.getTime()) ||
+    start.getTime() <= Date.now() ||
+    start.getTime() > Date.now() + 366 * 86400000
+  )
+    fail(400, 'Выберите будущее время начала в пределах года');
+  return start.toISOString();
+}
+function avatarImage(value) {
+  if (value === '') return '';
+  if (typeof value !== 'string') fail(400, 'Некорректная аватарка');
+  const match = value.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/);
+  if (!match) fail(400, 'Выберите PNG, JPEG или WebP');
+  const bytes = Buffer.from(match[2], 'base64');
+  const signatures = {
+    png: bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')),
+    jpeg: bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255,
+    webp: bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP',
+  };
+  if (bytes.length > 128 * 1024 || !signatures[match[1]] || bytes.toString('base64') !== match[2])
+    fail(400, 'Некорректная аватарка или размер больше 128 КБ');
+  return value;
+}
 export function createApplication({
   dataDir = './data',
   demo = false,
   appOrigin = '',
   push = null,
+  steamSearch = createSteamSearch(),
 } = {}) {
   const store = createStore(dataDir);
   const { get, all, run, transaction } = store;
@@ -60,6 +87,7 @@ export function createApplication({
       name: user.name,
       color: user.color,
       friend_code: user.friend_code,
+      avatar: user.avatar,
     };
   }
   function notify(userId, title, body, eventId = null, kind = 'event') {
@@ -94,11 +122,11 @@ export function createApplication({
   function state(userId) {
     const user = get('SELECT * FROM users WHERE id=?', userId);
     const friends = all(
-      'SELECT u.id,u.username,u.name,u.color FROM friends f JOIN users u ON u.id=f.friend_id WHERE f.user_id=? ORDER BY u.name',
+      'SELECT u.id,u.username,u.name,u.color,u.avatar FROM friends f JOIN users u ON u.id=f.friend_id WHERE f.user_id=? ORDER BY u.name',
       userId,
     );
     const requests = all(
-      'SELECT r.id,r.sender_id,r.recipient_id,u.name,u.username,u.color FROM friend_requests r JOIN users u ON u.id=CASE WHEN r.sender_id=? THEN r.recipient_id ELSE r.sender_id END WHERE r.sender_id=? OR r.recipient_id=?',
+      'SELECT r.id,r.sender_id,r.recipient_id,u.name,u.username,u.color,u.avatar FROM friend_requests r JOIN users u ON u.id=CASE WHEN r.sender_id=? THEN r.recipient_id ELSE r.sender_id END WHERE r.sender_id=? OR r.recipient_id=?',
       userId,
       userId,
       userId,
@@ -109,7 +137,7 @@ export function createApplication({
     );
     for (const event of events)
       event.participants = all(
-        'SELECT u.id,u.name,u.color,p.status FROM participants p JOIN users u ON u.id=p.user_id WHERE p.event_id=?',
+        'SELECT u.id,u.name,u.color,u.avatar,p.status FROM participants p JOIN users u ON u.id=p.user_id WHERE p.event_id=?',
         event.id,
       );
     return {
@@ -144,7 +172,7 @@ export function createApplication({
     transaction(() => {
       ids.forEach((id, i) =>
         run(
-          'INSERT INTO users VALUES(?,?,?,?,?,?,?)',
+          'INSERT INTO users(id,username,name,password,friend_code,color,created_at) VALUES(?,?,?,?,?,?,?)',
           id,
           ['demo', 'nikita', 'anya', 'max'][i],
           names[i],
@@ -370,7 +398,8 @@ export function createApplication({
         let bytes = 0;
         for await (const chunk of req) {
           bytes += chunk.length;
-          if (bytes > 32768) fail(413, 'Слишком большой запрос');
+          if (bytes > (path === '/api/profile' ? 200000 : 32768))
+            fail(413, 'Слишком большой запрос');
           chunks.push(chunk);
         }
         const data = Buffer.concat(chunks).toString('utf8');
@@ -404,7 +433,7 @@ export function createApplication({
             fail(409, 'Этот логин уже занят');
           const id = randomUUID();
           run(
-            'INSERT INTO users VALUES(?,?,?,?,?,?,?)',
+            'INSERT INTO users(id,username,name,password,friend_code,color,created_at) VALUES(?,?,?,?,?,?,?)',
             id,
             username,
             name,
@@ -419,7 +448,12 @@ export function createApplication({
             password,
             user?.password || '00000000000000000000000000000000:' + '00'.repeat(64),
           );
-          if (!user || !match) fail(401, 'Неверный логин или пароль');
+          if (
+            !user ||
+            !match ||
+            get('SELECT password FROM users WHERE id=?', user.id)?.password !== user.password
+          )
+            fail(401, 'Неверный логин или пароль');
         }
         const token = randomBytes(32).toString('base64url');
         run('INSERT INTO sessions VALUES(?,?,?)', hash(token), user.id, Date.now() + 30 * 86400000);
@@ -461,6 +495,50 @@ export function createApplication({
         return;
       }
       if (req.method === 'GET' && path === '/api/state') return send(200, state(uid));
+      if (req.method === 'GET' && path === '/api/steam/search') {
+        rate(`steam:${uid}`, 60);
+        const query = text(url.searchParams.get('q'), 'Поиск игры', 2, 100);
+        try {
+          return send(200, await steamSearch(query));
+        } catch {
+          fail(502, 'Steam сейчас недоступен. Попробуйте позже или введите игру вручную.');
+        }
+      }
+      if (req.method === 'POST' && path === '/api/profile') {
+        rate(`profile:${uid}`, 15);
+        const user = get('SELECT * FROM users WHERE id=?', uid);
+        const name = text(body.name, 'Имя', 2, 32);
+        const avatar = body.avatar === undefined ? user.avatar : avatarImage(body.avatar);
+        let password = user.password;
+        if (body.newPassword !== undefined) {
+          const currentPassword = text(body.currentPassword, 'Текущий пароль', 8, 128);
+          const next = text(body.newPassword, 'Новый пароль', 8, 128);
+          if (!(await passwordMatches(currentPassword, user.password)))
+            fail(403, 'Неверный текущий пароль');
+          password = await passwordHash(next);
+        }
+        transaction(() => {
+          if (
+            get('SELECT password FROM users WHERE id=?', uid).password !== user.password ||
+            !get('SELECT 1 FROM sessions WHERE hash=?', session.hash)
+          )
+            fail(409, 'Профиль уже изменён. Обновите страницу и повторите.');
+          run(
+            'UPDATE users SET name=?,avatar=?,password=? WHERE id=?',
+            name,
+            avatar,
+            password,
+            uid,
+          );
+          if (body.newPassword !== undefined)
+            run('DELETE FROM sessions WHERE user_id=? AND hash<>?', uid, session.hash);
+        });
+        invalidate([
+          uid,
+          ...all('SELECT user_id FROM friends WHERE friend_id=?', uid).map((r) => r.user_id),
+        ]);
+        return send(200, { user: publicUser(get('SELECT * FROM users WHERE id=?', uid)) });
+      }
       if (req.method === 'POST' && path === '/api/preferences') {
         if (
           typeof body.alarmEnabled !== 'boolean' ||
@@ -550,19 +628,12 @@ export function createApplication({
       }
       if (req.method === 'POST' && path === '/api/events') {
         rate(`event:${uid}`, 20);
-        const title = text(body.title, 'Название', 2, 80),
-          game = text(body.game, 'Игра', 2, 60);
-        const start = new Date(body.starts_at),
-          end = new Date(body.ends_at);
-        if (
-          !Number.isFinite(start.getTime()) ||
-          !Number.isFinite(end.getTime()) ||
-          start.getTime() <= Date.now() ||
-          end <= start ||
-          end - start > 24 * 3600000 ||
-          start.getTime() > Date.now() + 366 * 86400000
-        )
-          fail(400, 'Выберите будущее время и длительность до 24 часов (в пределах года)');
+        const game = text(body.game, 'Игра', 2, 200);
+        const title = body.title ? text(body.title, 'Название', 2, 200) : game;
+        const start = startTime(body.starts_at);
+        const steamId = body.steam_app_id ?? null;
+        if (steamId !== null && (!Number.isInteger(steamId) || steamId < 1 || steamId > 2147483647))
+          fail(400, 'Некорректная игра Steam');
         const tz = timezone(text(body.timezone, 'Часовой пояс', 1, 80));
         const notes = body.notes ? text(body.notes, 'Описание', 1, 1000) : '';
         const location = body.location ? text(body.location, 'Где играем', 1, 120) : 'Онлайн';
@@ -583,13 +654,14 @@ export function createApplication({
             uid,
             title,
             game,
-            start.toISOString(),
-            end.toISOString(),
+            start,
+            start,
             tz,
             notes,
             location,
             iso(),
           );
+          run('UPDATE events SET steam_app_id=? WHERE id=?', steamId, id);
           run('INSERT INTO participants VALUES(?,?,?)', id, uid, 'accepted');
           for (const friend of guests) {
             run('INSERT INTO participants VALUES(?,?,?)', id, friend, 'pending');
@@ -605,16 +677,54 @@ export function createApplication({
         invalidate([uid, ...guests]);
         return send(201, { id });
       }
-      match = path.match(/^\/api\/events\/([^/]+)\/(reply|cancel|messages)$/);
+      match = path.match(/^\/api\/events\/([^/]+)\/(reply|cancel|messages|reschedule)$/);
       if (match) {
         const event = requireEvent(match[1], uid);
         const action = match[2];
         const userIds = members(event.id);
+        if (req.method === 'POST' && action === 'reschedule') {
+          if (event.host_id !== uid) fail(403, 'Только организатор может перенести встречу');
+          if (event.cancelled) fail(409, 'Встреча отменена');
+          if (!Number.isInteger(body.version) || body.version !== event.version)
+            fail(409, 'Встреча уже изменена. Обновите данные и повторите.');
+          const start = startTime(body.starts_at);
+          const tz = timezone(text(body.timezone, 'Часовой пояс', 1, 80));
+          if (start !== event.starts_at || tz !== event.timezone)
+            transaction(() => {
+              run(
+                'UPDATE events SET starts_at=?,ends_at=?,timezone=?,version=version+1 WHERE id=?',
+                start,
+                start,
+                tz,
+                event.id,
+              );
+              run(
+                "UPDATE participants SET status='pending' WHERE event_id=? AND user_id<>?",
+                event.id,
+                uid,
+              );
+              run(
+                "DELETE FROM push_outbox WHERE notification_id IN (SELECT id FROM notifications WHERE event_id=? AND kind IN ('reminder','invite'))",
+                event.id,
+              );
+              run("DELETE FROM notifications WHERE event_id=? AND kind='reminder'", event.id);
+              for (const id of userIds.filter((id) => id !== uid))
+                notify(
+                  id,
+                  'Время встречи изменилось',
+                  `${event.game} · ${new Intl.DateTimeFormat('ru', { timeZone: tz, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(start))} (${tz}) · подтвердите участие заново`,
+                  event.id,
+                  'invite',
+                );
+            });
+          invalidate(userIds);
+          return send(200, { ok: true });
+        }
         if (req.method === 'GET' && action === 'messages')
           return send(
             200,
             all(
-              'SELECT m.*,u.name,u.color FROM messages m JOIN users u ON u.id=m.user_id WHERE m.event_id=? ORDER BY m.created_at DESC LIMIT 200',
+              'SELECT m.*,u.name,u.color,u.avatar FROM messages m JOIN users u ON u.id=m.user_id WHERE m.event_id=? ORDER BY m.created_at DESC LIMIT 200',
               event.id,
             ).reverse(),
           );
@@ -638,8 +748,8 @@ export function createApplication({
           return send(201, { id });
         }
         if (req.method === 'POST' && action === 'reply') {
-          if (event.cancelled || Date.parse(event.ends_at) <= Date.now())
-            fail(409, 'Встреча уже завершена или отменена');
+          if (event.cancelled || Date.parse(event.starts_at) <= Date.now())
+            fail(409, 'Встреча уже началась или отменена');
           if (event.host_id === uid) fail(400, 'Организатор уже участвует');
           if (!['accepted', 'declined'].includes(body.status)) fail(400, 'Неизвестный ответ');
           if (event.my_status !== body.status)
@@ -686,6 +796,17 @@ export function createApplication({
           if (typeof body.id !== 'string') fail(400, 'Неверное уведомление');
           run('UPDATE notifications SET is_read=1 WHERE user_id=? AND id=?', uid, body.id);
         } else run('UPDATE notifications SET is_read=1 WHERE user_id=?', uid);
+        invalidate([uid]);
+        return send(200, { ok: true });
+      }
+      if (req.method === 'POST' && path === '/api/notifications/clear') {
+        transaction(() => {
+          run(
+            'DELETE FROM push_outbox WHERE notification_id IN (SELECT id FROM notifications WHERE user_id=?)',
+            uid,
+          );
+          run('DELETE FROM notifications WHERE user_id=?', uid);
+        });
         invalidate([uid]);
         return send(200, { ok: true });
       }

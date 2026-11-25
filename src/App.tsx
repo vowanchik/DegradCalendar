@@ -46,6 +46,7 @@ import { Settings } from './Settings';
 import { NotificationPopover } from './NotificationPopover';
 import { loadPreferences, savePreferences, preferenceScope } from './preferences';
 import type { DevicePreferences } from './types';
+import { SteamPicker, steamImage } from './SteamPicker';
 
 type View = 'calendar' | 'invitations' | 'friends' | 'settings';
 const errorText = (e: unknown) =>
@@ -65,7 +66,7 @@ function Avatar({ person, small = false }: { person: Person; small?: boolean }) 
       style={{ '--avatar': person.color } as React.CSSProperties}
       title={person.name}
     >
-      {person.name.slice(0, 1).toUpperCase()}
+      {person.avatar ? <img src={person.avatar} alt="" /> : person.name.slice(0, 1).toUpperCase()}
     </span>
   );
 }
@@ -127,8 +128,23 @@ function Dialog({
     </dialog>
   );
 }
-function GameArt({ game }: { game: string }) {
+function GameArt({ game, steamId }: { game: string; steamId?: number | null }) {
   const kind = gameClass(game);
+  const [failed, setFailed] = useState(0);
+  useEffect(() => setFailed(0), [steamId]);
+  if (steamId && failed < 2)
+    return (
+      <div className="game-art steam-art">
+        <img
+          src={steamImage(steamId, failed ? 'header.jpg' : 'library_hero.jpg')}
+          alt={`Обложка ${game}`}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setFailed((value) => value + 1)}
+        />
+        <span className="art-game">{game}</span>
+      </div>
+    );
   return (
     <div className={`game-art ${kind}`} aria-hidden="true">
       <div className="art-orbit" />
@@ -488,6 +504,11 @@ export default function App() {
   }, [data?.user.id]);
   useEffect(() => {
     document.documentElement.dataset.theme = preferences.theme;
+    if (!window.partyup) document.body.style.zoom = String(preferences.zoom / 100);
+    document.documentElement.style.setProperty(
+      '--app-zoom',
+      window.partyup ? '1' : String(preferences.zoom / 100),
+    );
     if (data && preferenceAccount === preferenceScope(data.user.id))
       void window.partyup
         ?.configure({ scope: preferenceAccount, zone, preferences })
@@ -498,7 +519,7 @@ export default function App() {
       window.partyup?.onPreferences((value) => {
         if (!current.current) return;
         savePreferences(preferenceScope(current.current.user.id), value);
-        setPreferences(value);
+        setPreferences(loadPreferences(preferenceScope(current.current.user.id)));
       }),
     [],
   );
@@ -541,6 +562,7 @@ export default function App() {
       setFilter('upcoming');
       setDay(dateKey(new Date(), zone));
       setToast('');
+      setPreferences(loadPreferences('guest'));
     }
   }
   async function accept(event: GameEvent, status: 'accepted' | 'declined') {
@@ -579,22 +601,25 @@ export default function App() {
       </>
     );
   const pending = data.events.filter(
-    (e) => !e.cancelled && e.my_status === 'pending' && Date.parse(e.ends_at) > Date.now(),
+    (e) => !e.cancelled && e.my_status === 'pending' && Date.parse(e.starts_at) > Date.now(),
   );
-  const dayEvents = data.events.filter(
+  const calendarEvents = data.events.filter(
+    (e) => !preferences.hideInactive || (!e.cancelled && e.my_status !== 'declined'),
+  );
+  const dayEvents = calendarEvents.filter(
     (e) => dateKey(e.starts_at, zone) === (day || dateKey(new Date(), zone)),
   );
   const unread = data.unreadCount ?? data.notifications.filter((n) => !n.is_read).length;
   const activeEvent = data.events.find((e) => e.id === detail);
-  const visible = data.events.filter((e) => {
+  const visible = calendarEvents.filter((e) => {
     if (view === 'invitations') return pending.includes(e);
     if (
       filter === 'upcoming' &&
-      (e.cancelled || e.my_status === 'declined' || Date.parse(e.ends_at) <= Date.now())
+      (e.cancelled || e.my_status === 'declined' || Date.parse(e.starts_at) <= Date.now())
     )
       return false;
     if (filter === 'mine' && e.host_id !== data.user.id) return false;
-    if (filter === 'past' && Date.parse(e.ends_at) > Date.now() && !e.cancelled) return false;
+    if (filter === 'past' && Date.parse(e.starts_at) > Date.now() && !e.cancelled) return false;
     return `${e.game} ${e.title}`.toLowerCase().includes(query.toLowerCase());
   });
   const nav = [
@@ -626,7 +651,7 @@ export default function App() {
         </nav>
         <div className="sidebar-calendar">
           <MonthCalendar
-            events={data.events}
+            events={calendarEvents}
             zone={zone}
             selected={day}
             onSelect={(d) => {
@@ -744,7 +769,7 @@ export default function App() {
               {view === 'calendar' && (
                 <div className="calendar-view">
                   <MonthCalendar
-                    events={data.events}
+                    events={calendarEvents}
                     zone={zone}
                     selected={day}
                     onSelect={setDay}
@@ -832,6 +857,18 @@ export default function App() {
                       />
                     </label>
                   </div>
+                )}
+                {view === 'calendar' && (
+                  <label className="inactive-filter">
+                    <input
+                      type="checkbox"
+                      checked={preferences.hideInactive}
+                      onChange={(e) =>
+                        updatePreferences({ ...preferences, hideInactive: e.target.checked })
+                      }
+                    />
+                    Скрыть отменённые встречи и мои отказы
+                  </label>
                 )}
                 {visible.length ? (
                   <div className="event-grid">
@@ -937,6 +974,7 @@ export default function App() {
       )}
       {activeEvent && (
         <EventDetail
+          key={activeEvent.id}
           event={activeEvent}
           me={data.user.id}
           zone={zone}
@@ -976,7 +1014,7 @@ function EventCard({
   offline: boolean;
 }) {
   const [busy, setBusy] = useState(false);
-  const ended = Date.parse(event.ends_at) <= Date.now();
+  const ended = Date.parse(event.starts_at) <= Date.now();
   const reply = async (s: 'accepted' | 'declined') => {
     setBusy(true);
     try {
@@ -988,7 +1026,7 @@ function EventCard({
   return (
     <article className={`event-card ${event.cancelled ? 'cancelled' : ''}`}>
       <button className="card-art-button" onClick={onOpen} aria-label={`Открыть ${event.title}`}>
-        <GameArt game={event.game} />
+        <GameArt game={event.game} steamId={event.steam_app_id} />
         <span
           className={`card-badge ${event.cancelled ? 'neutral' : event.my_status === 'pending' ? 'pending' : event.my_status === 'declined' ? 'declined' : 'accepted'}`}
         >
@@ -1000,7 +1038,7 @@ function EventCard({
           {event.cancelled ? (
             'Отменена'
           ) : ended ? (
-            'Завершена'
+            'Началась'
           ) : event.my_status === 'pending' ? (
             'Ждёт ответа'
           ) : event.my_status === 'declined' ? (
@@ -1025,10 +1063,6 @@ function EventCard({
         <div className="event-host">
           <span>
             {event.host_id === me ? 'Вы собираете команду' : `Собирает ${event.host_name}`}
-          </span>
-          <span>
-            <Clock3 size={13} />
-            {Math.round((Date.parse(event.ends_at) - Date.parse(event.starts_at)) / 360000) / 10} ч
           </span>
         </div>
         <div className="card-participants">
@@ -1111,6 +1145,8 @@ function CreateEvent({
   const [selected, setSelected] = useState<string[]>([]),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
+  const [game, setGame] = useState('');
+  const [steamId, setSteamId] = useState<number | null>(null);
   const tz = zone;
   const tomorrow = dateKey(new Date(Date.now() + 86400000), tz);
   async function submit(e: FormEvent<HTMLFormElement>) {
@@ -1120,14 +1156,11 @@ function CreateEvent({
     try {
       const form = new FormData(e.currentTarget);
       const starts_at = zonedUtc(String(form.get('date')), String(form.get('time')), tz);
-      const ends_at = new Date(Date.parse(starts_at) + 2 * 60 * 60000).toISOString();
       const result = await api<{ id: string }>('/api/events', {
-        title: form.get('title'),
-        game: form.get('game'),
+        game,
+        steam_app_id: steamId,
         starts_at,
-        ends_at,
         timezone: tz,
-        notes: form.get('notes'),
         friends: selected,
       });
       await onCreated(result.id);
@@ -1151,27 +1184,12 @@ function CreateEvent({
         </div>
       ) : (
         <form onSubmit={submit} className="create-form">
-          <label>
-            Название игры
-            <input
-              name="game"
-              required
-              minLength={2}
-              maxLength={60}
-              placeholder="Введите название игры"
-              autoFocus
-            />
-          </label>
-          <label>
-            Как назовём вечер?
-            <input
-              name="title"
-              required
-              minLength={2}
-              maxLength={80}
-              placeholder="Например, пятничный кооп"
-            />
-          </label>
+          <SteamPicker
+            onChange={(name, id) => {
+              setGame(name);
+              setSteamId(id);
+            }}
+          />
           <div className="form-row">
             <label>
               Дата
@@ -1225,15 +1243,6 @@ function CreateEvent({
               ))}
             </div>
           </div>
-          <label>
-            Пара слов для команды <span className="muted">· необязательно</span>
-            <textarea
-              name="notes"
-              maxLength={1000}
-              rows={2}
-              placeholder="Режим, пожелания и план на вечер…"
-            />
-          </label>
           {error && (
             <div className="form-error" role="alert">
               <AlertCircle size={17} />
@@ -1278,6 +1287,8 @@ function EventDetail({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [confirm, setConfirm] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editVersion, setEditVersion] = useState(event.version);
   const bottom = useRef<HTMLDivElement>(null);
   const count = useRef(0);
   useEffect(() => {
@@ -1322,12 +1333,32 @@ function EventDetail({
       setBusy(false);
     }
   }
-  const ended = Date.parse(event.ends_at) <= Date.now();
+  async function reschedule(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const form = new FormData(e.currentTarget);
+      await api(`/api/events/${event.id}/reschedule`, {
+        starts_at: zonedUtc(String(form.get('date')), String(form.get('time')), zone),
+        timezone: zone,
+        version: editVersion,
+      });
+      await refresh();
+      setEditing(false);
+      toast('Время обновлено. Участникам отправлен запрос подтверждения.');
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const ended = Date.parse(event.starts_at) <= Date.now();
   return (
     <Dialog title={event.title} onClose={onClose} wide>
       <div className="detail-layout">
         <div className="detail-info">
-          <GameArt game={event.game} />
+          <GameArt game={event.game} steamId={event.steam_app_id} />
           <div className="detail-facts">
             <p>
               <CalendarDays size={18} />
@@ -1336,12 +1367,67 @@ function EventDetail({
             <p>
               <Clock3 size={18} />
               <span>
-                {formatTime(event.starts_at, zone)}–{formatTime(event.ends_at, zone)}{' '}
-                <small>{zone}</small>
+                {formatTime(event.starts_at, zone)} <small>{zone}</small>
               </span>
             </p>
           </div>
-          {event.notes && <p className="event-notes">{event.notes}</p>}
+          {event.host_id === me &&
+            !event.cancelled &&
+            (editing ? (
+              <form className="reschedule-form" onSubmit={reschedule}>
+                <div className="form-row">
+                  <label>
+                    Дата
+                    <input
+                      type="date"
+                      name="date"
+                      required
+                      min={dateKey(new Date(), zone)}
+                      defaultValue={dateKey(event.starts_at, zone)}
+                    />
+                  </label>
+                  <label>
+                    Начало
+                    <input
+                      type="time"
+                      name="time"
+                      required
+                      defaultValue={new Intl.DateTimeFormat('en-GB', {
+                        timeZone: zone,
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hourCycle: 'h23',
+                      }).format(new Date(event.starts_at))}
+                    />
+                  </label>
+                </div>
+                <p className="field-hint">
+                  {zone}. Участникам нужно будет подтвердить новое время.
+                </p>
+                <button className="button primary" disabled={busy || offline}>
+                  Сохранить время
+                </button>
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() => setEditing(false)}
+                >
+                  Отмена
+                </button>
+              </form>
+            ) : (
+              <button
+                className="button secondary full"
+                disabled={offline}
+                onClick={() => {
+                  setEditVersion(event.version);
+                  setEditing(true);
+                }}
+              >
+                Изменить время
+              </button>
+            ))}
           <h3 className="small-heading">
             Команда <span>{event.participants.length}</span>
           </h3>
@@ -1457,7 +1543,10 @@ function EventDetail({
             {messages.length ? (
               messages.map((m) => (
                 <div className={`message ${m.user_id === me ? 'own' : ''}`} key={m.id}>
-                  <Avatar person={{ id: m.user_id, name: m.name, color: m.color }} small />
+                  <Avatar
+                    person={{ id: m.user_id, name: m.name, color: m.color, avatar: m.avatar }}
+                    small
+                  />
                   <div>
                     <div className="message-meta">
                       <strong>{m.name}</strong>
