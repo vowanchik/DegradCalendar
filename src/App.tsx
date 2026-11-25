@@ -266,6 +266,19 @@ function MonthCalendar({
   );
 }
 
+function TransportNotice({ address }: { address: string }) {
+  if (!address.trim().toLowerCase().startsWith('http://')) return null;
+  return (
+    <div className="transport-notice" role="note">
+      <AlertCircle size={17} />
+      <span>
+        Подключение без шифрования. Пароль, сообщения и токен входа передаются по HTTP.
+        Используйте отдельный пароль для PartyUp.
+      </span>
+    </div>
+  );
+}
+
 function Auth({ onLogin }: { onLogin(): Promise<void> }) {
   const [register, setRegister] = useState(false),
     [busy, setBusy] = useState(false),
@@ -388,14 +401,15 @@ function Auth({ onLogin }: { onLogin(): Promise<void> }) {
                   setServer(e.target.value);
                   setDemo(false);
                 }}
-                placeholder="https://party.example.com"
+                placeholder="http://192.168.1.50:3001"
                 type="url"
                 required
               />
               <span className="field-hint">
-                На всех устройствах должен быть указан один сервер.
+                HTTP или HTTPS. На всех устройствах должен быть указан один сервер.
               </span>
             </label>
+            <TransportNotice address={server} />
             {error && (
               <div className="form-error" role="alert">
                 <AlertCircle size={17} />
@@ -2045,12 +2059,13 @@ function Settings({
             <span>Общий сервер</span>
             <code>{serverUrl()}</code>
           </div>
+          <TransportNotice address={serverUrl()} />
           <button className="button secondary full" style={{ marginTop: 16 }} onClick={onLogout}>
             <Globe2 size={17} /> Сменить сервер
           </button>
           <p className="setting-footnote">
             Смена сервера завершает сессию на этом устройстве и доступна без подключения. Версия
-            0.1.1 ·{' '}
+            0.1.2 ·{' '}
             {mobile ? 'Мобильное приложение' : desktop ? 'Windows-приложение' : 'Предпросмотр'}
           </p>
         </section>

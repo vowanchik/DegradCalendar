@@ -2,6 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- CapacitorHttp uses URLSession for the HTTP or HTTPS API selected by the user. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>PartyUp подключается к общему серверу друзей, в том числе по адресу в домашней сети.</string>
     <key>NSCalendarsFullAccessUsageDescription</key>
     <string>PartyUp добавляет принятые игровые встречи в календарь и удаляет их при отмене. Содержимое других событий не отправляется на сервер.</string>
     <key>NSCalendarsUsageDescription</key>

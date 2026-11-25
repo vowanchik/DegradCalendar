@@ -38,13 +38,10 @@ export function setServerUrl(value: string) {
   try {
     url = new URL(value);
   } catch {
-    throw new Error('Укажите полный адрес сервера, например https://party.example.com');
+    throw new Error('Укажите полный адрес сервера, например http://192.168.1.50:3001');
   }
-  if (
-    url.protocol !== 'https:' &&
-    !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '10.0.2.2'].includes(url.hostname))
-  )
-    throw new Error('Для удалённого сервера нужен HTTPS');
+  if (!['https:', 'http:'].includes(url.protocol))
+    throw new Error('Адрес сервера должен начинаться с http:// или https://');
   if (url.username || url.password || url.pathname !== '/' || url.search || url.hash)
     throw new Error('Укажите адрес без пути, пароля и параметров');
   localStorage.setItem('partyup.server', url.origin);

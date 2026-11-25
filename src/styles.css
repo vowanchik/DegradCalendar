@@ -1766,6 +1766,25 @@ main {
   font-size: 0.78rem;
   color: #b3d29e;
 }
+.transport-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid #765c35;
+  border-radius: 8px;
+  background: #332a1e;
+  color: #f1cd96;
+  font-size: 0.73rem;
+  line-height: 1.6;
+}
+.transport-notice > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.server-address + .transport-notice {
+  margin-top: 12px;
+}
 .startup-error {
   position: fixed;
   top: 10px;

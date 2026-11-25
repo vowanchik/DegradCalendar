@@ -10,6 +10,7 @@ const {
 } = require('electron');
 const { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } = require('node:fs');
 const path = require('node:path');
+const { serverOrigin } = require('./server-origin.cjs');
 let window,
   tray,
   quitting = false,
@@ -170,17 +171,11 @@ ipcMain.handle('autostart', (event, enabled) => {
 ipcMain.on('connect', (event, data) => {
   if (!trusted(event) || typeof data?.token !== 'string') return;
   try {
-    const origin = new URL(data.origin);
-    if (
-      origin.protocol !== 'https:' &&
-      !(origin.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(origin.hostname))
-    )
-      return;
-    if (origin.username || origin.password) return;
-    if (connection?.token === data.token && connection?.origin === origin.origin) return;
+    const origin = serverOrigin(data.origin);
+    if (connection?.token === data.token && connection?.origin === origin) return;
     generation++;
     seen.clear();
-    connection = { origin: origin.origin, token: data.token, baseline: true };
+    connection = { origin, token: data.token, baseline: true };
     void poll(true);
   } catch {}
 });
