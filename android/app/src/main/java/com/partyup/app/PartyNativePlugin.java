@@ -1,11 +1,19 @@
 package com.partyup.app;
-import android.Manifest;
-import android.content.ContentUris;
-import android.content.ContentValues;
 import android.content.SharedPreferences;
-import android.database.Cursor;
 import android.net.Uri;
-import android.provider.CalendarContract;
+import android.content.Intent;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.media.AudioAttributes;
+import android.media.MediaMetadataRetriever;
+import android.media.MediaPlayer;
+import android.media.RingtoneManager;
+import android.os.Build;
+import androidx.core.content.FileProvider;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.security.MessageDigest;
+import java.util.Locale;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
@@ -18,9 +26,7 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import java.nio.charset.StandardCharsets;
 
-@CapacitorPlugin(name = "PartyNative", permissions = {
-    @Permission(alias = "calendar", strings = {Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR})
-})
+@CapacitorPlugin(name = "PartyNative")
 public class PartyNativePlugin extends Plugin {
     private SharedPreferences prefs() { return getContext().getSharedPreferences("partyup.private", 0); }
     private SecretKey key() throws Exception {
@@ -48,38 +54,60 @@ public class PartyNativePlugin extends Plugin {
         } catch(Exception e) { prefs().edit().remove("token").apply(); call.reject("Сессия недоступна. Войдите заново.",e); }
     }
     @PluginMethod public void clearToken(PluginCall call) { prefs().edit().remove("token").apply(); call.resolve(); }
-    @PluginMethod public void saveCalendar(PluginCall call) {
-        if(getPermissionState("calendar") != PermissionState.GRANTED) { requestPermissionForAlias("calendar",call,"calendarPermission"); return; } saveEvent(call);
+    private MediaPlayer preview;
+    private String soundKey(PluginCall call) throws Exception {
+        String scope=call.getString("scope"), kind=call.getString("kind");
+        if(scope==null || scope.length()>1000 || kind==null || !kind.matches("invite|reply|decline|message|friend|cancel|reminder")) throw new Exception("Неверный запрос звука");
+        return "sound."+digest((scope+":"+kind).getBytes(StandardCharsets.UTF_8));
     }
-    @PermissionCallback private void calendarPermission(PluginCall call) {
-        if(getPermissionState("calendar") == PermissionState.GRANTED) saveEvent(call);
-        else call.reject("Разрешите доступ к календарю в настройках телефона. Ответ на приглашение уже сохранён.");
+    private String digest(byte[] value) throws Exception {
+        byte[] hash=MessageDigest.getInstance("SHA-256").digest(value); StringBuilder result=new StringBuilder();
+        for(byte b:hash) result.append(String.format(Locale.ROOT,"%02x", b & 0xff)); return result.toString();
     }
-    private void saveEvent(PluginCall call) {
+    @PluginMethod public void setSound(PluginCall call) {
         try {
-            String eventKey=call.getString("key"), title=call.getString("title"); Double starts=call.getDouble("startMs"), ends=call.getDouble("endMs");
-            if(eventKey==null || title==null || starts==null || ends==null || ends<=starts) { call.reject("Неверные данные встречи"); return; }
-            long calendarId=-1;
-            try(Cursor calendars=getContext().getContentResolver().query(CalendarContract.Calendars.CONTENT_URI,new String[]{CalendarContract.Calendars._ID},CalendarContract.Calendars.VISIBLE+"=1 AND "+CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL+">=?",new String[]{String.valueOf(CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR)},CalendarContract.Calendars.IS_PRIMARY+" DESC")) {
-                if(calendars!=null && calendars.moveToFirst()) calendarId=calendars.getLong(0);
+            String mapping=soundKey(call);
+            if(Boolean.TRUE.equals(call.getBoolean("reset"))) { prefs().edit().remove(mapping).apply(); call.resolve(new JSObject()); return; }
+            String data=call.getString("dataUrl"), name=call.getString("name");
+            if(data==null || data.length()>2800000 || !data.matches("data:audio/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+") || name==null || name.length()>200 || !name.toLowerCase(Locale.ROOT).matches(".*\\.(wav|mp3|ogg|m4a|caf|aiff?)")) throw new Exception("Выберите звуковой файл до 2 МБ");
+            byte[] bytes=Base64.decode(data.substring(data.indexOf(',')+1),Base64.DEFAULT);
+            if(bytes.length>2*1024*1024) throw new Exception("Файл больше 2 МБ");
+            String digest=digest((mapping+data).getBytes(StandardCharsets.UTF_8));
+            String filename=digest+name.substring(name.lastIndexOf('.')).toLowerCase(Locale.ROOT);
+            File directory=new File(getContext().getFilesDir(),"notification-sounds");
+            if(!directory.exists() && !directory.mkdirs()) throw new Exception("Хранилище недоступно");
+            File file=new File(directory,filename);
+            try(FileOutputStream output=new FileOutputStream(file)) { output.write(bytes); }
+            MediaMetadataRetriever metadata=new MediaMetadataRetriever();
+            try {
+                metadata.setDataSource(file.getAbsolutePath());
+                long duration=Long.parseLong(metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION));
+                if(duration<=0 || duration>=30000) { file.delete(); throw new Exception("Длительность звука должна быть меньше 30 секунд"); }
+            } finally { metadata.release(); }
+            String channelId="partyup-"+call.getString("kind")+"-"+digest.substring(0,24);
+            Uri uri=FileProvider.getUriForFile(getContext(),getContext().getPackageName()+".fileprovider",file);
+            for(String target:new String[]{"com.android.systemui","com.google.android.gms","android"}) getContext().grantUriPermission(target,uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            if(Build.VERSION.SDK_INT>=26) {
+                NotificationChannel channel=new NotificationChannel(channelId,"PartyUp · "+call.getString("kind"),NotificationManager.IMPORTANCE_HIGH);
+                AudioAttributes attrs=new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build();
+                channel.setSound(uri,attrs); channel.enableVibration(true);
+                getContext().getSystemService(NotificationManager.class).createNotificationChannel(channel);
             }
-            if(calendarId<0) { call.reject("На телефоне нет календаря для записи. Добавьте календарь в системном приложении."); return; }
-            ContentValues values=new ContentValues(); values.put(CalendarContract.Events.CALENDAR_ID,calendarId); values.put(CalendarContract.Events.TITLE,title);
-            values.put(CalendarContract.Events.DTSTART,starts.longValue()); values.put(CalendarContract.Events.DTEND,ends.longValue()); values.put(CalendarContract.Events.EVENT_TIMEZONE,"UTC");
-            values.put(CalendarContract.Events.DESCRIPTION,call.getString("notes","")); values.put(CalendarContract.Events.EVENT_LOCATION,call.getString("location","")); values.put(CalendarContract.Events.HAS_ALARM,1);
-            String mapping="calendar."+eventKey; long id=prefs().getLong(mapping,-1);
-            if(id>=0 && getContext().getContentResolver().update(ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI,id),values,null,null)==0) id=-1;
-            if(id<0) { Uri uri=getContext().getContentResolver().insert(CalendarContract.Events.CONTENT_URI,values); if(uri==null) throw new Exception("Calendar insert failed"); id=ContentUris.parseId(uri); prefs().edit().putLong(mapping,id).apply(); }
-            getContext().getContentResolver().delete(CalendarContract.Reminders.CONTENT_URI,CalendarContract.Reminders.EVENT_ID+"=?",new String[]{String.valueOf(id)});
-            ContentValues reminder=new ContentValues(); reminder.put(CalendarContract.Reminders.EVENT_ID,id); reminder.put(CalendarContract.Reminders.MINUTES,15); reminder.put(CalendarContract.Reminders.METHOD,CalendarContract.Reminders.METHOD_ALERT);
-            getContext().getContentResolver().insert(CalendarContract.Reminders.CONTENT_URI,reminder); call.resolve();
-        } catch(Exception e) { call.reject("Не удалось сохранить событие в календарь",e); }
+            prefs().edit().putString(mapping,filename).apply();
+            JSObject result=new JSObject(); result.put("name",name); result.put("channelId",channelId); call.resolve(result);
+        } catch(Exception e) { call.reject(e.getMessage(),e); }
     }
-    @PluginMethod public void removeCalendar(PluginCall call) {
-        String eventKey=call.getString("key"); if(eventKey==null) { call.reject("Неверный идентификатор"); return; }
-        String mapping="calendar."+eventKey; long id=prefs().getLong(mapping,-1); if(id<0) { call.resolve(); return; }
-        if(getPermissionState("calendar")!=PermissionState.GRANTED) { call.reject("Нет доступа к календарю"); return; }
-        try { getContext().getContentResolver().delete(ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI,id),null,null); prefs().edit().remove(mapping).apply(); call.resolve(); }
-        catch(Exception e) { call.reject("Не удалось удалить отменённую встречу",e); }
+    @PluginMethod public void previewSound(PluginCall call) {
+        try {
+            String file=prefs().getString(soundKey(call),null);
+            if(preview!=null) { preview.release(); preview=null; }
+            preview=new MediaPlayer();
+            preview.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).build());
+            if(file!=null) preview.setDataSource(new File(new File(getContext().getFilesDir(),"notification-sounds"),file).getAbsolutePath());
+            else preview.setDataSource(getContext(),RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION));
+            preview.setOnCompletionListener(player -> { player.release(); if(preview==player) preview=null; });
+            preview.prepare(); preview.start(); call.resolve();
+        } catch(Exception e) { if(preview!=null) { preview.release(); preview=null; } call.reject("Не удалось воспроизвести звук",e); }
     }
+    @Override protected void handleOnDestroy() { if(preview!=null) { preview.release(); preview=null; } }
 }

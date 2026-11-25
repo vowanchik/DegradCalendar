@@ -3,15 +3,10 @@ import {
   Bell,
   CalendarDays,
   Check,
-  CheckCheck,
-  ChevronLeft,
   ChevronRight,
   Clock3,
   Copy,
-  Download,
   Gamepad2,
-  Headphones,
-  LayoutGrid,
   LogOut,
   MessageCircle,
   Plus,
@@ -22,7 +17,6 @@ import {
   Sparkles,
   Users,
   X,
-  Zap,
   LoaderCircle,
   CheckCircle2,
   Circle,
@@ -38,33 +32,22 @@ import {
   SessionChangedError,
   getSessionVersion,
   connectDesktop,
-  desktop,
   loadToken,
   mobile,
   saveToken,
   serverUrl,
   setServerUrl,
 } from './api';
-import {
-  addCalendar,
-  enablePush,
-  logoutPush,
-  removeCalendar,
-  stopPush,
-  FirebaseMessaging,
-} from './integrations';
-import { dateKey, defaultZone, formatDate, formatTime, zonedUtc, zones } from './time';
+import { enablePush, logoutPush, stopPush } from './integrations';
+import { dateKey, defaultZone, formatDate, formatTime, zonedUtc } from './time';
 import type { AppState, GameEvent, Message, Person } from './types';
+import { MonthCalendar } from './Calendar';
+import { Settings } from './Settings';
+import { NotificationPopover } from './NotificationPopover';
+import { loadPreferences, savePreferences, preferenceScope } from './preferences';
+import type { DevicePreferences } from './types';
 
-const games = [
-  'Counter-Strike 2',
-  'Helldivers 2',
-  'Minecraft',
-  'Dota 2',
-  'Baldur’s Gate 3',
-  'Другая игра',
-];
-type View = 'schedule' | 'calendar' | 'invitations' | 'friends' | 'settings';
+type View = 'calendar' | 'invitations' | 'friends' | 'settings';
 const errorText = (e: unknown) =>
   e instanceof Error ? e.message : 'Не удалось выполнить действие';
 const gameClass = (game: string) =>
@@ -188,83 +171,6 @@ function GameArt({ game }: { game: string }) {
     </div>
   );
 }
-function MonthCalendar({
-  events,
-  zone,
-  selected,
-  onSelect,
-}: {
-  events: GameEvent[];
-  zone: string;
-  selected: string;
-  onSelect(day: string): void;
-}) {
-  const [month, setMonth] = useState(() => new Date(dateKey(new Date(), zone) + 'T12:00:00Z'));
-  const y = month.getUTCFullYear(),
-    m = month.getUTCMonth();
-  const offset = (new Date(Date.UTC(y, m, 1)).getUTCDay() + 6) % 7;
-  const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate(),
-    today = dateKey(new Date(), zone);
-  return (
-    <div className="month-calendar">
-      <div className="month-header">
-        <strong>
-          {new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric', timeZone: 'UTC' })
-            .format(month)
-            .replace(' г.', '')}
-        </strong>
-        <div>
-          <button
-            aria-label="Предыдущий месяц"
-            className="icon-button"
-            onClick={() => setMonth(new Date(Date.UTC(y, m - 1, 1)))}
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <button
-            aria-label="Следующий месяц"
-            className="icon-button"
-            onClick={() => setMonth(new Date(Date.UTC(y, m + 1, 1)))}
-          >
-            <ChevronRight size={16} />
-          </button>
-        </div>
-      </div>
-      <div className="month-grid">
-        {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((d) => (
-          <span className="weekday" key={d}>
-            {d}
-          </span>
-        ))}
-        {Array.from({ length: offset }, (_, i) => (
-          <span key={'blank' + i} />
-        ))}
-        {Array.from({ length: days }, (_, i) => {
-          const key = `${y}-${String(m + 1).padStart(2, '0')}-${String(i + 1).padStart(2, '0')}`;
-          const has = events.some(
-            (e) => !e.cancelled && e.my_status !== 'declined' && dateKey(e.starts_at, zone) === key,
-          );
-          return (
-            <button
-              key={key}
-              onClick={() => onSelect(selected === key ? '' : key)}
-              className={`${key === selected ? 'selected' : ''} ${key === today ? 'today' : ''} ${has ? 'has-event' : ''}`}
-              aria-label={`${i + 1} ${new Intl.DateTimeFormat('ru', { month: 'long', timeZone: 'UTC' }).format(month)}${has ? ', есть встречи' : ''}`}
-              aria-pressed={key === selected}
-            >
-              {i + 1}
-            </button>
-          );
-        })}
-      </div>
-      {selected && (
-        <button className="text-button calendar-reset" onClick={() => onSelect('')}>
-          Показать все даты <X size={13} />
-        </button>
-      )}
-    </div>
-  );
-}
 
 function TransportNotice({ address }: { address: string }) {
   if (!address.trim().toLowerCase().startsWith('http://')) return null;
@@ -272,8 +178,8 @@ function TransportNotice({ address }: { address: string }) {
     <div className="transport-notice" role="note">
       <AlertCircle size={17} />
       <span>
-        Подключение без шифрования. Пароль, сообщения и токен входа передаются по HTTP.
-        Используйте отдельный пароль для PartyUp.
+        Подключение без шифрования. Пароль, сообщения и токен входа передаются по HTTP. Используйте
+        отдельный пароль для PartyUp.
       </span>
     </div>
   );
@@ -465,15 +371,19 @@ export default function App() {
   const [data, setData] = useState<AppState | null>(null),
     [loading, setLoading] = useState(true),
     [offline, setOffline] = useState(false);
-  const [view, setView] = useState<View>('schedule'),
+  const [view, setView] = useState<View>('calendar'),
     [zone, setZone] = useState(localStorage.getItem('partyup.zone') || defaultZone);
-  const [modal, setModal] = useState<'create' | 'notifications' | null>(null),
+  const [modal, setModal] = useState<'create' | null>(null),
     [detail, setDetail] = useState(''),
     [query, setQuery] = useState(''),
     [filter, setFilter] = useState('upcoming'),
-    [day, setDay] = useState('');
+    [day, setDay] = useState(dateKey(new Date(), zone));
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [preferences, setPreferences] = useState<DevicePreferences>(() => loadPreferences('guest'));
+  const [preferenceAccount, setPreferenceAccount] = useState('');
   const [toast, setToast] = useState(''),
     [initialError, setInitialError] = useState('');
+  const notificationAnchor = useRef<HTMLDivElement>(null);
   const refreshing = useRef<number | null>(null);
   const current = useRef<AppState | null>(null);
   current.current = data;
@@ -557,23 +467,60 @@ export default function App() {
       void listener?.remove();
     };
   }, [Boolean(data), refresh]);
-  // Remove previously exported native events after cancellation or a changed RSVP.
-  useEffect(() => {
-    if (!mobile || !data) return;
-    for (const e of data.events)
-      if (e.cancelled || e.my_status === 'declined')
-        void removeCalendar(e, data.user.id).catch(() => {});
-  }, [data]);
   useEffect(() => {
     if (!data || !mobile || localStorage.getItem('partyup.push') !== 'true' || !data.pushConfigured)
       return;
-    void enablePush(() => {
-      void refresh();
-    }, setDetail).catch((e) => toastFn(errorText(e)));
+    void enablePush(
+      () => {
+        void refresh();
+      },
+      setDetail,
+      data.user.id,
+    ).catch((e) => toastFn(errorText(e)));
     return () => {
       void stopPush();
     };
   }, [data?.user.id, data?.pushConfigured, refresh, toastFn]);
+  useEffect(() => {
+    if (!data) return;
+    setPreferences(loadPreferences(preferenceScope(data.user.id)));
+    setPreferenceAccount(preferenceScope(data.user.id));
+  }, [data?.user.id]);
+  useEffect(() => {
+    document.documentElement.dataset.theme = preferences.theme;
+    if (data && preferenceAccount === preferenceScope(data.user.id))
+      void window.partyup
+        ?.configure({ scope: preferenceAccount, zone, preferences })
+        .catch((e) => toastFn(errorText(e)));
+  }, [preferences, preferenceAccount, zone, data?.user.id, toastFn]);
+  useEffect(
+    () =>
+      window.partyup?.onPreferences((value) => {
+        if (!current.current) return;
+        savePreferences(preferenceScope(current.current.user.id), value);
+        setPreferences(value);
+      }),
+    [],
+  );
+  useEffect(() => {
+    if (!notificationsOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!notificationAnchor.current?.contains(event.target as Node)) setNotificationsOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNotificationsOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [notificationsOpen]);
+  function updatePreferences(value: DevicePreferences) {
+    savePreferences(preferenceScope(data!.user.id), value);
+    setPreferences(value);
+  }
   async function logout() {
     logoutPush();
     try {
@@ -587,11 +534,12 @@ export default function App() {
       setData(null);
       setOffline(false);
       setModal(null);
+      setNotificationsOpen(false);
       setDetail('');
-      setView('schedule');
+      setView('calendar');
       setQuery('');
       setFilter('upcoming');
-      setDay('');
+      setDay(dateKey(new Date(), zone));
       setToast('');
     }
   }
@@ -604,18 +552,6 @@ export default function App() {
           ? 'Вы в команде! Встреча подтверждена.'
           : 'Ответ отправлен. Увидимся в следующий раз!',
       );
-      if (
-        status === 'accepted' &&
-        mobile &&
-        localStorage.getItem('partyup.autoCalendar') !== 'false'
-      )
-        try {
-          await addCalendar(event, data!.user.id);
-          toastFn('Вы в команде! Встреча добавлена в календарь.');
-        } catch (e) {
-          toastFn(`Ответ сохранён. Календарь: ${errorText(e)}`);
-        }
-      if (status === 'declined') await removeCalendar(event, data!.user.id);
     } catch (e) {
       toastFn(errorText(e));
     }
@@ -645,10 +581,10 @@ export default function App() {
   const pending = data.events.filter(
     (e) => !e.cancelled && e.my_status === 'pending' && Date.parse(e.ends_at) > Date.now(),
   );
-  const upcoming = data.events.filter(
-    (e) => !e.cancelled && e.my_status === 'accepted' && Date.parse(e.ends_at) > Date.now(),
+  const dayEvents = data.events.filter(
+    (e) => dateKey(e.starts_at, zone) === (day || dateKey(new Date(), zone)),
   );
-  const unread = data.notifications.filter((n) => !n.is_read).length;
+  const unread = data.unreadCount ?? data.notifications.filter((n) => !n.is_read).length;
   const activeEvent = data.events.find((e) => e.id === detail);
   const visible = data.events.filter((e) => {
     if (view === 'invitations') return pending.includes(e);
@@ -659,11 +595,9 @@ export default function App() {
       return false;
     if (filter === 'mine' && e.host_id !== data.user.id) return false;
     if (filter === 'past' && Date.parse(e.ends_at) > Date.now() && !e.cancelled) return false;
-    if (day && dateKey(e.starts_at, zone) !== day) return false;
     return `${e.game} ${e.title}`.toLowerCase().includes(query.toLowerCase());
   });
   const nav = [
-    { id: 'schedule', label: 'Мои встречи', icon: LayoutGrid },
     { id: 'calendar', label: 'Календарь', icon: CalendarDays },
     { id: 'invitations', label: 'Приглашения', icon: Bell },
     { id: 'friends', label: 'Моя команда', icon: Users },
@@ -672,16 +606,6 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <Logo />
-        <div className="workspace-tag">
-          <span className="workspace-icon">
-            <Gamepad2 size={19} />
-          </span>
-          <div>
-            <strong>Игровой штаб</strong>
-            <span>Только вы и ваши друзья</span>
-          </div>
-        </div>
-        <span className="nav-label">ВАШЕ ПРОСТРАНСТВО</span>
         <nav>
           {nav.map((item) => (
             <button
@@ -689,7 +613,7 @@ export default function App() {
               className={`nav-item ${view === item.id ? 'active' : ''}`}
               onClick={() => {
                 setView(item.id);
-                setDay('');
+                setDay(dateKey(new Date(), zone));
               }}
             >
               <item.icon size={20} />
@@ -712,14 +636,6 @@ export default function App() {
           />
         </div>
         <div className="sidebar-bottom">
-          <div className="sidebar-note">
-            <Sparkles size={20} />
-            <strong>Лучше вместе</strong>
-            <p>
-              Хорошая компания —<br />
-              уже половина победы.
-            </p>
-          </div>
           <button
             className={`nav-item ${view === 'settings' ? 'active' : ''}`}
             onClick={() => setView('settings')}
@@ -743,18 +659,16 @@ export default function App() {
           <div className="breadcrumb">
             Игровой штаб <span>/</span>
             <strong>
-              {view === 'schedule'
-                ? 'Обзор'
-                : view === 'calendar'
-                  ? 'Календарь'
-                  : view === 'invitations'
-                    ? 'Приглашения'
-                    : view === 'friends'
-                      ? 'Моя команда'
-                      : 'Настройки'}
+              {view === 'calendar'
+                ? 'Календарь'
+                : view === 'invitations'
+                  ? 'Приглашения'
+                  : view === 'friends'
+                    ? 'Моя команда'
+                    : 'Настройки'}
             </strong>
           </div>
-          <div className="topbar-right">
+          <div className="topbar-right" ref={notificationAnchor}>
             <span className={`connection ${offline ? 'offline' : ''}`}>
               <span />
               {offline ? 'Нет связи' : 'Сервер подключён'}
@@ -763,11 +677,27 @@ export default function App() {
               className="notification-button icon-button"
               title="Уведомления"
               aria-label={`Уведомления${unread ? ', непрочитанных: ' + unread : ''}`}
-              onClick={() => setModal('notifications')}
+              aria-expanded={notificationsOpen}
+              onClick={() => setNotificationsOpen(!notificationsOpen)}
             >
               <Bell size={21} />
               {unread > 0 && <b>{unread}</b>}
             </button>
+            {notificationsOpen && (
+              <NotificationPopover
+                notices={data.notifications}
+                unreadCount={unread}
+                zone={zone}
+                onClose={() => setNotificationsOpen(false)}
+                onRead={refresh}
+                toast={toastFn}
+                onOpen={(id) => {
+                  setNotificationsOpen(false);
+                  if (id) setDetail(id);
+                  else setView('friends');
+                }}
+              />
+            )}
             <Avatar person={data.user} small />
           </div>
         </header>
@@ -783,7 +713,7 @@ export default function App() {
               <Sparkles size={14} /> Локальное демо · данные общие для демонстрационных аккаунтов
             </div>
           )}
-          {(view === 'schedule' || view === 'calendar' || view === 'invitations') && (
+          {(view === 'calendar' || view === 'invitations') && (
             <>
               <div className="page-heading">
                 <div>
@@ -811,81 +741,6 @@ export default function App() {
                   <Plus size={19} /> Создать встречу
                 </button>
               </div>
-              {view === 'schedule' && (
-                <>
-                  <section className="hero">
-                    <img
-                      src="./assets/expedition.svg"
-                      alt="Путешественники у портала в зелёных горах"
-                    />
-                    <div className="hero-shade" />
-                    <div className="hero-content">
-                      <span className="hero-label">
-                        <span>✦</span> СЛЕДУЮЩЕЕ ПРИКЛЮЧЕНИЕ — ВАШЕ
-                      </span>
-                      <h2>
-                        В одиночку — игра.
-                        <br />
-                        Вместе — <em>история.</em>
-                      </h2>
-                      <p>
-                        Выберите игру, позовите друзей.
-                        <br />
-                        Мы поможем собрать всех в одно время.
-                      </p>
-                      <button
-                        className="button hero-button"
-                        disabled={offline}
-                        onClick={() => setModal('create')}
-                      >
-                        <Gamepad2 size={18} /> Собрать команду
-                      </button>
-                    </div>
-                    <div className="hero-footnote">
-                      <span>CO-OP IS A STATE OF MIND</span>
-                      <Sparkles size={15} />
-                    </div>
-                  </section>
-                  <div className="stats">
-                    <div>
-                      <span className="stat-icon mint">
-                        <CalendarDays size={21} />
-                      </span>
-                      <div>
-                        <strong>
-                          {upcoming.length}
-                          <span>в планах</span>
-                        </strong>
-                        <p>Подтверждённых встреч</p>
-                      </div>
-                    </div>
-                    <div>
-                      <span className="stat-icon lavender">
-                        <Bell size={21} />
-                      </span>
-                      <div>
-                        <strong>
-                          {pending.length}
-                          <span>приглашений</span>
-                        </strong>
-                        <p>Ждут вашего ответа</p>
-                      </div>
-                    </div>
-                    <div>
-                      <span className="stat-icon peach">
-                        <Users size={21} />
-                      </span>
-                      <div>
-                        <strong>
-                          {data.friends.length}
-                          <span>в команде</span>
-                        </strong>
-                        <p>Друзей для хороших каток</p>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
               {view === 'calendar' && (
                 <div className="calendar-view">
                   <MonthCalendar
@@ -894,25 +749,55 @@ export default function App() {
                     selected={day}
                     onSelect={setDay}
                   />
-                  <div>
-                    <CalendarDays size={32} />
-                    <h3>{day ? formatDate(day + 'T12:00Z', 'UTC') : 'Выберите день для игры'}</h3>
-                    <p className="muted">
-                      Дни с точкой — ваши запланированные встречи.
-                      <br />
-                      Время отображается в поясе {zone}.
-                    </p>
+                  <div className="day-events">
+                    <div className="section-heading">
+                      <h3>{formatDate((day || dateKey(new Date(), zone)) + 'T12:00Z', 'UTC')}</h3>
+                      <span className="count-label">{dayEvents.length}</span>
+                    </div>
+                    {dayEvents.length ? (
+                      dayEvents.map((event) => (
+                        <button
+                          className={`day-event ${event.my_status}`}
+                          key={event.id}
+                          onClick={() => setDetail(event.id)}
+                        >
+                          <time>{formatTime(event.starts_at, zone)}</time>
+                          <span>
+                            <strong>{event.title}</strong>
+                            <small>{event.game}</small>
+                          </span>
+                          <b>
+                            {event.cancelled
+                              ? 'Отменена'
+                              : event.my_status === 'pending'
+                                ? 'Приглашение'
+                                : event.my_status === 'declined'
+                                  ? 'Вы отказались'
+                                  : 'Вы участвуете'}
+                          </b>
+                          <ChevronRight size={17} />
+                        </button>
+                      ))
+                    ) : (
+                      <div className="day-empty">
+                        <CalendarDays size={26} />
+                        <p>На этот день встреч нет</p>
+                        <button
+                          className="text-button"
+                          disabled={offline}
+                          onClick={() => setModal('create')}
+                        >
+                          Создать встречу
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
               <section className="events-section">
                 <div className="section-heading">
                   <h2>
-                    {view === 'invitations'
-                      ? 'Входящие приглашения'
-                      : day
-                        ? formatDate(day + 'T12:00Z', 'UTC')
-                        : 'На горизонте'}{' '}
+                    {view === 'invitations' ? 'Входящие приглашения' : 'На горизонте'}{' '}
                     <span className="count-label">{visible.length}</span>
                   </h2>
                   <span className="timezone-note">
@@ -994,6 +879,8 @@ export default function App() {
           {view === 'friends' && <Friends data={data} refresh={refresh} toast={toastFn} />}
           {view === 'settings' && (
             <Settings
+              preferences={preferences}
+              setPreferences={updatePreferences}
               onLogout={logout}
               data={data}
               zone={zone}
@@ -1021,13 +908,11 @@ export default function App() {
             key={n.id}
             onClick={() => {
               setView(n.id);
-              setDay('');
+              setDay(dateKey(new Date(), zone));
             }}
           >
             <n.icon size={21} />
-            <span>
-              {n.id === 'schedule' ? 'Встречи' : n.id === 'friends' ? 'Команда' : n.label}
-            </span>
+            <span>{n.id === 'friends' ? 'Команда' : n.label}</span>
             {n.id === 'invitations' && pending.length > 0 && <i>{pending.length}</i>}
           </button>
         ))}
@@ -1049,65 +934,6 @@ export default function App() {
             toastFn('Встреча создана. Приглашения ждут друзей в приложении.');
           }}
         />
-      )}
-      {modal === 'notifications' && (
-        <Dialog title="Уведомления" onClose={() => setModal(null)}>
-          <div className="notice-top">
-            <span className="muted">
-              {unread ? 'Непрочитанных: ' + unread : 'Вы всё прочитали'}
-            </span>
-            <button
-              className="text-button"
-              disabled={!unread}
-              onClick={() => {
-                void api('/api/notifications/read', {})
-                  .then(refresh)
-                  .catch((e) => toastFn(errorText(e)));
-              }}
-            >
-              <CheckCheck size={16} /> Прочитать все
-            </button>
-          </div>
-          <div className="notices">
-            {data.notifications.length ? (
-              data.notifications.map((n) => (
-                <button
-                  key={n.id}
-                  className={`notice ${!n.is_read ? 'unread' : ''}`}
-                  onClick={() => {
-                    setModal(null);
-                    if (n.event_id) setDetail(n.event_id);
-                    else setView('friends');
-                  }}
-                >
-                  <span className="notice-icon">
-                    {n.kind === 'message' ? (
-                      <MessageCircle size={18} />
-                    ) : n.kind === 'friend' ? (
-                      <Users size={18} />
-                    ) : (
-                      <Bell size={18} />
-                    )}
-                  </span>
-                  <div>
-                    <strong>{n.title}</strong>
-                    <p>{n.body}</p>
-                    <time>
-                      {formatDate(n.created_at, zone)} · {formatTime(n.created_at, zone)}
-                    </time>
-                  </div>
-                  {!n.is_read && <i />}
-                </button>
-              ))
-            ) : (
-              <div className="empty">
-                <Bell />
-                <h3>Всё спокойно</h3>
-                <p>Здесь будут приглашения, ответы и напоминания.</p>
-              </div>
-            )}
-          </div>
-        </Dialog>
       )}
       {activeEvent && (
         <EventDetail
@@ -1164,8 +990,13 @@ function EventCard({
       <button className="card-art-button" onClick={onOpen} aria-label={`Открыть ${event.title}`}>
         <GameArt game={event.game} />
         <span
-          className={`card-badge ${event.cancelled ? 'neutral' : event.my_status === 'pending' ? 'pending' : event.my_status === 'declined' ? 'neutral' : 'accepted'}`}
+          className={`card-badge ${event.cancelled ? 'neutral' : event.my_status === 'pending' ? 'pending' : event.my_status === 'declined' ? 'declined' : 'accepted'}`}
         >
+          {event.my_status === 'declined' && !event.cancelled && (
+            <div className="declined-banner">
+              <X size={19} /> Вы отказались от участия. Организатор получил уведомление.
+            </div>
+          )}
           {event.cancelled ? (
             'Отменена'
           ) : ended ? (
@@ -1173,7 +1004,7 @@ function EventCard({
           ) : event.my_status === 'pending' ? (
             'Ждёт ответа'
           ) : event.my_status === 'declined' ? (
-            'Не участвую'
+            'Вы отказались'
           ) : (
             <>
               <Check size={12} /> Вы в команде
@@ -1201,15 +1032,38 @@ function EventCard({
           </span>
         </div>
         <div className="card-participants">
-          <div className="avatar-stack">
-            {event.participants.slice(0, 5).map((p) => (
-              <Avatar key={p.id} person={p} small />
+          <div className="participant-summary">
+            <strong>
+              {event.participants.filter((p) => p.status === 'accepted').length} из{' '}
+              {event.participants.length} готовы
+            </strong>
+            <button className="text-button" onClick={onOpen}>
+              Команда
+            </button>
+          </div>
+          <div className="participant-chips">
+            {event.participants.map((p) => (
+              <span key={p.id} className={`participant-chip ${p.status}`}>
+                <Avatar person={p} small />
+                <span>{p.name}</span>
+                <b>
+                  {p.status === 'accepted' ? (
+                    <>
+                      <CheckCircle2 size={15} /> Готов
+                    </>
+                  ) : p.status === 'pending' ? (
+                    <>
+                      <Clock3 size={15} /> Ждём ответ
+                    </>
+                  ) : (
+                    <>
+                      <X size={15} /> Отказался
+                    </>
+                  )}
+                </b>
+              </span>
             ))}
           </div>
-          <span>
-            <b>{event.participants.filter((p) => p.status === 'accepted').length}</b> из{' '}
-            {event.participants.length} в сборе
-          </span>
           <button className="icon-button" onClick={onOpen} aria-label={`Обсудить ${event.title}`}>
             <MessageCircle size={18} />
           </button>
@@ -1224,11 +1078,11 @@ function EventCard({
               {busy ? <Busy /> : <Check size={17} />} Я в деле
             </button>
             <button
-              className="button secondary"
+              className="button danger"
               disabled={busy || offline}
               onClick={() => reply('declined')}
             >
-              Не смогу
+              <X size={17} /> Отказаться
             </button>
           </div>
         ) : (
@@ -1255,10 +1109,9 @@ function CreateEvent({
   onCreated(id: string): Promise<void>;
 }) {
   const [selected, setSelected] = useState<string[]>([]),
-    [game, setGame] = useState(games[0]),
-    [tz, setTz] = useState(zone),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
+  const tz = zone;
   const tomorrow = dateKey(new Date(Date.now() + 86400000), tz);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -1267,17 +1120,14 @@ function CreateEvent({
     try {
       const form = new FormData(e.currentTarget);
       const starts_at = zonedUtc(String(form.get('date')), String(form.get('time')), tz);
-      const ends_at = new Date(
-        Date.parse(starts_at) + Number(form.get('duration')) * 60000,
-      ).toISOString();
+      const ends_at = new Date(Date.parse(starts_at) + 2 * 60 * 60000).toISOString();
       const result = await api<{ id: string }>('/api/events', {
         title: form.get('title'),
-        game: game === 'Другая игра' ? form.get('customGame') : game,
+        game: form.get('game'),
         starts_at,
         ends_at,
         timezone: tz,
         notes: form.get('notes'),
-        location: form.get('location'),
         friends: selected,
       });
       await onCreated(result.id);
@@ -1302,25 +1152,16 @@ function CreateEvent({
       ) : (
         <form onSubmit={submit} className="create-form">
           <label>
-            Во что играем?
-            <select value={game} onChange={(e) => setGame(e.target.value)}>
-              {games.map((g) => (
-                <option key={g}>{g}</option>
-              ))}
-            </select>
+            Название игры
+            <input
+              name="game"
+              required
+              minLength={2}
+              maxLength={60}
+              placeholder="Введите название игры"
+              autoFocus
+            />
           </label>
-          {game === 'Другая игра' && (
-            <label>
-              Название игры
-              <input
-                name="customGame"
-                required
-                minLength={2}
-                maxLength={60}
-                placeholder="Например, Sea of Thieves"
-              />
-            </label>
-          )}
           <label>
             Как назовём вечер?
             <input
@@ -1329,10 +1170,9 @@ function CreateEvent({
               minLength={2}
               maxLength={80}
               placeholder="Например, пятничный кооп"
-              autoFocus
             />
           </label>
-          <div className="form-row three">
+          <div className="form-row">
             <label>
               Дата
               <input
@@ -1347,25 +1187,8 @@ function CreateEvent({
               Начало
               <input type="time" name="time" defaultValue="20:00" required />
             </label>
-            <label>
-              На сколько?
-              <select name="duration" defaultValue="120">
-                {[60, 90, 120, 180, 240, 360].map((n) => (
-                  <option key={n} value={n}>
-                    {n / 60} ч
-                  </option>
-                ))}
-              </select>
-            </label>
           </div>
-          <label>
-            Часовой пояс
-            <select value={tz} onChange={(e) => setTz(e.target.value)}>
-              {zones.map((z) => (
-                <option key={z}>{z}</option>
-              ))}
-            </select>
-          </label>
+          <p className="field-hint">Время в вашем часовом поясе: {zone.replaceAll('_', ' ')}.</p>
           <div className="form-friends">
             <div className="field-label">
               Кого зовём?{' '}
@@ -1402,10 +1225,6 @@ function CreateEvent({
               ))}
             </div>
           </div>
-          <label>
-            Где общаемся?
-            <input name="location" defaultValue="Discord · общий голосовой" maxLength={120} />
-          </label>
           <label>
             Пара слов для команды <span className="muted">· необязательно</span>
             <textarea
@@ -1521,10 +1340,6 @@ function EventDetail({
                 <small>{zone}</small>
               </span>
             </p>
-            <p>
-              <Headphones size={18} />
-              <span>{event.location}</span>
-            </p>
           </div>
           {event.notes && <p className="event-notes">{event.notes}</p>}
           <h3 className="small-heading">
@@ -1539,42 +1354,36 @@ function EventDetail({
                   {p.id === event.host_id && <small>Организатор</small>}
                 </span>
                 <b className={p.status}>
-                  {p.status === 'accepted'
-                    ? 'В деле'
-                    : p.status === 'pending'
-                      ? 'Ждём ответ'
-                      : 'Не сможет'}
+                  {p.status === 'accepted' ? (
+                    <>
+                      <CheckCircle2 size={15} /> Готов
+                    </>
+                  ) : p.status === 'pending' ? (
+                    <>
+                      <Clock3 size={15} /> Ждём ответ
+                    </>
+                  ) : (
+                    <>
+                      <X size={15} /> Отказался
+                    </>
+                  )}
                 </b>
               </div>
             ))}
           </div>
+          {event.my_status === 'declined' && !event.cancelled && (
+            <div className="declined-banner">
+              <X size={19} /> Вы отказались от участия. Организатор получил уведомление.
+            </div>
+          )}
           {event.cancelled ? (
             <div className="form-error">Встреча отменена организатором.</div>
           ) : (
             <div className="detail-buttons">
-              {event.my_status === 'accepted' && (
-                <button
-                  className="button secondary full"
-                  disabled={offline}
-                  onClick={() => {
-                    void addCalendar(event, me)
-                      .then(() =>
-                        toast(
-                          mobile
-                            ? 'Событие сохранено в календарь'
-                            : 'Файл календаря подготовлен. Откройте его в своём приложении календаря.',
-                        ),
-                      )
-                      .catch((e) => toast(errorText(e)));
-                  }}
-                >
-                  <Download size={17} /> {mobile ? 'Добавить в календарь' : 'Скачать событие .ics'}
-                </button>
-              )}
               {!ended && event.host_id !== me && (
                 <>
                   <button
-                    className="button primary full"
+                    className={`button ${event.my_status === 'accepted' ? 'danger' : 'primary'} full`}
                     disabled={busy || offline}
                     onClick={async () => {
                       setBusy(true);
@@ -1588,18 +1397,18 @@ function EventDetail({
                     {busy ? (
                       <Busy />
                     ) : event.my_status === 'accepted' ? (
-                      'Изменить ответ: не смогу'
+                      'Отказаться от участия'
                     ) : (
                       'Я в деле'
                     )}
                   </button>
                   {event.my_status === 'pending' && (
                     <button
-                      className="text-button"
+                      className="button danger full"
                       disabled={busy || offline}
                       onClick={() => onReply('declined')}
                     >
-                      Не смогу в этот раз
+                      <X size={17} /> Отклонить приглашение
                     </button>
                   )}
                 </>
@@ -1854,222 +1663,6 @@ function Friends({
           <p>Поделитесь кодом или отправьте заявку по коду друга.</p>
         </div>
       )}
-    </>
-  );
-}
-
-function Settings({
-  data,
-  zone,
-  setZone,
-  refresh,
-  onOpen,
-  toast,
-  onLogout,
-}: {
-  onLogout(): Promise<void>;
-  data: AppState;
-  zone: string;
-  setZone(s: string): void;
-  refresh(): Promise<void>;
-  onOpen(s: string): void;
-  toast(s: string): void;
-}) {
-  const [autoCalendar, setAutoCalendar] = useState(
-      localStorage.getItem('partyup.autoCalendar') !== 'false',
-    ),
-    [pushEnabled, setPushEnabled] = useState(localStorage.getItem('partyup.push') === 'true'),
-    [autoStart, setAutoStart] = useState(localStorage.getItem('partyup.autostart') === 'true'),
-    [busy, setBusy] = useState(false);
-  return (
-    <>
-      <div className="page-heading">
-        <div>
-          <span className="section-kicker">ВСЁ ПОД ВАШ РИТМ</span>
-          <h1>Настройки</h1>
-          <p>Чтобы команда собиралась, а важное не терялось.</p>
-        </div>
-      </div>
-      <div className="settings-profile panel">
-        <Avatar person={data.user} />
-        <div>
-          <strong>{data.user.name}</strong>
-          <span>@{data.user.username}</span>
-        </div>
-        <button className="button secondary" onClick={onLogout}>
-          <LogOut size={17} /> Выйти
-        </button>
-      </div>
-      <div className="settings-grid">
-        <section className="panel settings-panel">
-          <span className="settings-icon">
-            <Globe2 />
-          </span>
-          <h2>Время и даты</h2>
-          <p className="muted">
-            Друзья могут быть в разных городах. Каждый увидит начало по своему часовому поясу.
-          </p>
-          <label>
-            Ваш часовой пояс
-            <select value={zone} onChange={(e) => setZone(e.target.value)}>
-              {zones.map((z) => (
-                <option key={z}>{z}</option>
-              ))}
-            </select>
-          </label>
-          <p className="setting-footnote">Встречи хранятся на сервере в UTC.</p>
-        </section>
-        <section className="panel settings-panel">
-          <span className="settings-icon lavender">
-            <Bell />
-          </span>
-          <h2>Уведомления</h2>
-          <p className="muted">
-            Приглашения, ответы, сообщения и напоминание за 15 минут до начала.
-          </p>
-          {mobile ? (
-            <>
-              <div className="setting-row">
-                <span>Мобильные push</span>
-                <button
-                  className={`toggle ${pushEnabled ? 'on' : ''}`}
-                  role="switch"
-                  aria-checked={pushEnabled}
-                  aria-label="Мобильные push"
-                  disabled={busy || !data.pushConfigured}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      if (pushEnabled) {
-                        await stopPush();
-                        await FirebaseMessaging.deleteToken();
-                      } else
-                        await enablePush(() => {
-                          void refresh();
-                        }, onOpen);
-                      localStorage.setItem('partyup.push', String(!pushEnabled));
-                      setPushEnabled(!pushEnabled);
-                      toast(
-                        pushEnabled
-                          ? 'Push отключены на этом устройстве'
-                          : 'Уведомления подключены',
-                      );
-                    } catch (e) {
-                      toast(errorText(e));
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  <span />
-                </button>
-              </div>
-              {!data.pushConfigured && (
-                <p className="setting-footnote">
-                  Администратору нужно подключить Firebase на сервере и в мобильной сборке.
-                </p>
-              )}
-            </>
-          ) : (
-            <>
-              <div className="native-note">
-                <Monitor size={19} />
-                {desktop
-                  ? 'Windows-уведомления работают, пока приложение запущено в трее.'
-                  : 'Это предпросмотр интерфейса. Системные уведомления доступны в Windows-приложении.'}
-              </div>
-              {desktop && (
-                <div className="setting-row">
-                  <span>Запускать при входе в Windows</span>
-                  <button
-                    className={`toggle ${autoStart ? 'on' : ''}`}
-                    role="switch"
-                    aria-checked={autoStart}
-                    aria-label="Запускать при входе в Windows"
-                    onClick={async () => {
-                      try {
-                        await window.partyup!.setAutoStart(!autoStart);
-                        localStorage.setItem('partyup.autostart', String(!autoStart));
-                        setAutoStart(!autoStart);
-                      } catch (e) {
-                        toast(errorText(e));
-                      }
-                    }}
-                  >
-                    <span />
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-        </section>
-        <section className="panel settings-panel">
-          <span className="settings-icon peach">
-            <CalendarDays />
-          </span>
-          <h2>Системный календарь</h2>
-          {mobile ? (
-            <>
-              <p className="muted">
-                После принятия приглашения сохранять встречу в календарь телефона. При первом
-                сохранении система запросит разрешение.
-              </p>
-              <div className="setting-row">
-                <span>Добавлять после принятия</span>
-                <button
-                  role="switch"
-                  aria-checked={autoCalendar}
-                  aria-label="Добавлять после принятия"
-                  className={`toggle ${autoCalendar ? 'on' : ''}`}
-                  onClick={() => {
-                    localStorage.setItem('partyup.autoCalendar', String(!autoCalendar));
-                    setAutoCalendar(!autoCalendar);
-                  }}
-                >
-                  <span />
-                </button>
-              </div>
-              <p className="setting-footnote">
-                Отмены удаляются из календаря при открытии приложения. Если календарь недоступен,
-                ваш ответ всё равно сохранится.
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="muted">
-                В принятой встрече можно скачать файл .ics и открыть его в приложении календаря,
-                которое поддерживает импорт.
-              </p>
-              <p className="setting-footnote">
-                Изменения и отмены в уже импортированный файл автоматически не попадут.
-              </p>
-            </>
-          )}
-        </section>
-        <section className="panel settings-panel">
-          <span className="settings-icon">
-            <ShieldCheck />
-          </span>
-          <h2>Ваше пространство</h2>
-          <p className="muted">
-            Встречи доступны только организатору и приглашённым участникам. Добавление в друзья
-            требует подтверждения.
-          </p>
-          <div className="server-address">
-            <span>Общий сервер</span>
-            <code>{serverUrl()}</code>
-          </div>
-          <TransportNotice address={serverUrl()} />
-          <button className="button secondary full" style={{ marginTop: 16 }} onClick={onLogout}>
-            <Globe2 size={17} /> Сменить сервер
-          </button>
-          <p className="setting-footnote">
-            Смена сервера завершает сессию на этом устройстве и доступна без подключения. Версия
-            0.1.2 ·{' '}
-            {mobile ? 'Мобильное приложение' : desktop ? 'Windows-приложение' : 'Предпросмотр'}
-          </p>
-        </section>
-      </div>
     </>
   );
 }

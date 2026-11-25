@@ -38,8 +38,24 @@ export type AppState = {
   requests: (Person & { sender_id: string; recipient_id: string })[];
   events: GameEvent[];
   notifications: Notice[];
+  unreadCount: number;
   pushConfigured: boolean;
   demo: boolean;
+  preferences: { alarmEnabled: boolean; alarmMinutes: number };
+};
+export type SoundKind =
+  'invite' | 'reply' | 'decline' | 'message' | 'friend' | 'cancel' | 'reminder';
+export type SoundChoice = { name: string; channelId?: string; soundName?: string };
+export type DevicePreferences = {
+  theme: 'forest' | 'ocean' | 'violet' | 'light';
+  widgetEnabled: boolean;
+  sounds: Partial<Record<SoundKind, SoundChoice>>;
+};
+export type WidgetState = {
+  events: GameEvent[];
+  zone: string;
+  theme: DevicePreferences['theme'];
+  connected: boolean;
 };
 export type Message = {
   id: string;
@@ -58,9 +74,21 @@ export type NativeAPI = {
   disconnect(): void;
   onOpen(callback: (id: string) => void): () => void;
   setAutoStart(enabled: boolean): Promise<void>;
+  configure(data: { scope: string; zone: string; preferences: DevicePreferences }): Promise<void>;
+  setSound(
+    data: { kind: SoundKind; name: string; dataUrl: string } | { kind: SoundKind; reset: true },
+  ): Promise<SoundChoice | null>;
+  previewSound(kind: SoundKind): Promise<void>;
+  onPreferences(callback: (value: DevicePreferences) => void): () => void;
 };
 declare global {
   interface Window {
     partyup?: NativeAPI;
+    partyupWidget?: {
+      getState(): Promise<WidgetState>;
+      onState(callback: (state: WidgetState) => void): () => void;
+      openEvent(id: string): void;
+      hide(): void;
+    };
   }
 }

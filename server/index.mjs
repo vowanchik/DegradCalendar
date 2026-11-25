@@ -5,16 +5,26 @@ if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
   const { getMessaging } = await import('firebase-admin/messaging');
   initializeApp({ credential: applicationDefault() });
   push = async (tokens, data) => {
-    const result = await getMessaging().sendEachForMulticast({
-      tokens,
-      notification: { title: data.title, body: data.body },
-      data: { eventId: data.eventId, notificationId: data.notificationId },
-      android: {
-        priority: 'high',
-        notification: { channelId: 'partyup', icon: 'ic_stat_partyup' },
-      },
-      apns: { payload: { aps: { sound: 'default' } } },
-    });
+    const result = await getMessaging().sendEach(
+      tokens.map((token) => ({
+        token,
+        notification: { title: data.title, body: data.body },
+        data: { eventId: data.eventId, notificationId: data.notificationId, kind: data.kind },
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: data.deviceSounds[token]?.[data.kind]?.channelId || 'partyup',
+            icon: 'ic_stat_partyup',
+            sound: 'default',
+          },
+        },
+        apns: {
+          payload: {
+            aps: { sound: data.deviceSounds[token]?.[data.kind]?.soundName || 'default' },
+          },
+        },
+      })),
+    );
     const dead = [];
     result.responses.forEach((r, i) => {
       if (

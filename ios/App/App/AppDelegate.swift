@@ -1,6 +1,8 @@
 import UIKit
 import Capacitor
-import EventKit
+import AVFoundation
+import AudioToolbox
+import CryptoKit
 import Security
 import FirebaseCore
 
@@ -42,10 +44,10 @@ public class PartyNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getToken", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setToken", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearToken", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "saveCalendar", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "removeCalendar", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "setSound", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "previewSound", returnType: CAPPluginReturnPromise)
     ]
-    private let events = EKEventStore()
+    private var preview: AVAudioPlayer?
     private var keychainQuery: [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.partyup.session", kSecAttrAccount as String: "session"] }
     @objc func getToken(_ call: CAPPluginCall) {
         var query = keychainQuery; query[kSecReturnData as String] = true; query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -68,39 +70,44 @@ public class PartyNativePlugin: CAPPlugin, CAPBridgedPlugin {
         let status = SecItemDelete(keychainQuery as CFDictionary)
         if status == errSecSuccess || status == errSecItemNotFound { call.resolve() } else { call.reject("Не удалось удалить сессию") }
     }
-    private func calendarAccess(_ call: CAPPluginCall, action: @escaping () -> Void) {
-        let callback: (Bool, Error?) -> Void = { granted, error in
-            DispatchQueue.main.async {
-                if granted { action() } else { call.reject("Разрешите доступ к календарю в настройках iPhone. Ответ на приглашение уже сохранён.", nil, error) }
-            }
-        }
-        if #available(iOS 17.0, *) { events.requestFullAccessToEvents(completion: callback) }
-        else { events.requestAccess(to: .event, completion: callback) }
+    private func soundKey(_ call: CAPPluginCall) -> String? {
+        guard let scope = call.getString("scope"), scope.count <= 1000, let kind = call.getString("kind"), ["invite", "reply", "decline", "message", "friend", "cancel", "reminder"].contains(kind) else { return nil }
+        return "partyup.sound." + SHA256.hash(data: Data((scope + ":" + kind).utf8)).map { String(format: "%02x", $0) }.joined()
     }
-    @objc func saveCalendar(_ call: CAPPluginCall) {
-        guard let key = call.getString("key"), let title = call.getString("title"), let start = call.getDouble("startMs"), let end = call.getDouble("endMs"), end > start else { call.reject("Неверные данные встречи"); return }
-        calendarAccess(call) { [self] in
-            let mapping = "partyup.calendar." + key
-            let previous = UserDefaults.standard.string(forKey: mapping)
-            let event = previous.flatMap { events.event(withIdentifier: $0) } ?? EKEvent(eventStore: events)
-            if event.calendar == nil { event.calendar = events.defaultCalendarForNewEvents }
-            guard event.calendar != nil else { call.reject("На телефоне нет календаря для записи. Добавьте его в системных настройках."); return }
-            event.title = title; event.startDate = Date(timeIntervalSince1970: start / 1000); event.endDate = Date(timeIntervalSince1970: end / 1000)
-            event.notes = call.getString("notes") ?? ""; event.location = call.getString("location") ?? ""; event.alarms = [EKAlarm(relativeOffset: -900)]
-            do { try events.save(event, span: .thisEvent); UserDefaults.standard.set(event.eventIdentifier, forKey: mapping); call.resolve() }
-            catch { call.reject("Не удалось сохранить встречу в календарь", nil, error) }
-        }
+    @objc func setSound(_ call: CAPPluginCall) {
+        guard let key = soundKey(call) else { call.reject("Неверный запрос звука"); return }
+        if call.getBool("reset") == true { UserDefaults.standard.removeObject(forKey: key); call.resolve(); return }
+        guard let name = call.getString("name"), name.count <= 200, let url = call.getString("dataUrl"), url.count <= 2800000, url.hasPrefix("data:audio/"), let comma = url.range(of: ";base64,"), let data = Data(base64Encoded: String(url[comma.upperBound...])), data.count <= 2 * 1024 * 1024 else { call.reject("Выберите звуковой файл до 2 МБ"); return }
+        let ext = (name as NSString).pathExtension.lowercased()
+        guard ["wav", "caf", "aif", "aiff"].contains(ext) else { call.reject("Для iPhone выберите WAV, CAF или AIFF"); return }
+        do {
+            let source = try AVAudioPlayer(data: data)
+            guard source.duration > 0 && source.duration < 30 else { call.reject("Длительность звука должна быть меньше 30 секунд"); return }
+            // APNs supports PCM/ADPCM. Normalize imported audio to PCM WAV.
+            let directory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Sounds", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let digest = SHA256.hash(data: Data(key.utf8) + data).map { String(format: "%02x", $0) }.joined()
+            let file = "partyup-" + digest + ".wav"
+            let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + "." + ext)
+            try data.write(to: temporary, options: .atomic)
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            let input = try AVAudioFile(forReading: temporary)
+            let format = input.processingFormat
+            let output = try AVAudioFile(forWriting: directory.appendingPathComponent(file), settings: [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: format.sampleRate, AVNumberOfChannelsKey: format.channelCount, AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false])
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(input.length)) else { call.reject("Не удалось обработать звук"); return }
+            try input.read(into: buffer)
+            try output.write(from: buffer)
+            UserDefaults.standard.set(file, forKey: key)
+            call.resolve(["name": name, "soundName": file])
+        } catch { call.reject("Не удалось сохранить звук: используйте WAV, CAF или AIFF", nil, error) }
     }
-    @objc func removeCalendar(_ call: CAPPluginCall) {
-        guard let key = call.getString("key") else { call.reject("Неверный идентификатор"); return }
-        let mapping = "partyup.calendar." + key
-        guard let id = UserDefaults.standard.string(forKey: mapping) else { call.resolve(); return }
-        let status = EKEventStore.authorizationStatus(for: .event)
-        if #available(iOS 17.0, *) { guard status == .fullAccess else { call.reject("Нет доступа к календарю"); return } }
-        else { guard status == .authorized else { call.reject("Нет доступа к календарю"); return } }
-        DispatchQueue.main.async { [self] in
-            do { if let event = events.event(withIdentifier: id) { try events.remove(event, span: .thisEvent) }; UserDefaults.standard.removeObject(forKey: mapping); call.resolve() }
-            catch { call.reject("Не удалось удалить отменённую встречу", nil, error) }
-        }
+    @objc func previewSound(_ call: CAPPluginCall) {
+        guard let key = soundKey(call) else { call.reject("Неверный запрос звука"); return }
+        preview?.stop()
+        guard let file = UserDefaults.standard.string(forKey: key) else { AudioServicesPlayAlertSound(1007); call.resolve(); return }
+        do {
+            let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Sounds").appendingPathComponent(file)
+            preview = try AVAudioPlayer(contentsOf: url); preview?.play(); call.resolve()
+        } catch { call.reject("Не удалось воспроизвести звук", nil, error) }
     }
 }

@@ -18,6 +18,8 @@ export function createStore(directory) {
     CREATE TABLE IF NOT EXISTS devices(token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), platform TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS push_outbox(id TEXT PRIMARY KEY, notification_id TEXT NOT NULL REFERENCES notifications(id), attempts INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS reminders(event_id TEXT NOT NULL, user_id TEXT NOT NULL, version INTEGER NOT NULL, PRIMARY KEY(event_id,user_id,version));
+    CREATE TABLE IF NOT EXISTS preferences(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, alarm_enabled INTEGER NOT NULL DEFAULT 1, alarm_minutes INTEGER NOT NULL DEFAULT 15);
+    CREATE TABLE IF NOT EXISTS device_sounds(token TEXT PRIMARY KEY REFERENCES devices(token) ON DELETE CASCADE, sounds TEXT NOT NULL DEFAULT '{}');
     CREATE INDEX IF NOT EXISTS participants_user ON participants(user_id);
     CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id,created_at);
     CREATE INDEX IF NOT EXISTS messages_event ON messages(event_id,created_at);

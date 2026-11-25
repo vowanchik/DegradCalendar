@@ -1,22 +1,19 @@
 import { registerPlugin } from '@capacitor/core';
 import type { FirebaseMessagingPlugin } from '@capacitor-firebase/messaging';
-import {
-  api,
-  mobile,
-  native,
-  platform,
-  downloadCalendar,
-  revokeSession,
-  getSessionVersion,
-} from './api.ts';
-import type { GameEvent } from './types';
+import { api, mobile, platform, revokeSession, getSessionVersion } from './api.ts';
+import { loadPreferences, preferenceScope } from './preferences.ts';
 // Native targets use the installed native plugin, with no browser Firebase SDK.
 export const FirebaseMessaging = registerPlugin<FirebaseMessagingPlugin>('FirebaseMessaging');
 let pushToken: string | undefined;
+let pushUserId: string | undefined;
 let handles: { remove(): Promise<void> }[] = [];
 let pushVersion = 0;
 let tokenCleanup: Promise<unknown> = Promise.resolve();
-export async function enablePush(onChange: () => void, onOpen: (id: string) => void) {
+export async function enablePush(
+  onChange: () => void,
+  onOpen: (id: string) => void,
+  userId: string,
+) {
   if (!mobile) return;
   const stopping = stopPush();
   const version = pushVersion;
@@ -38,8 +35,15 @@ export async function enablePush(onChange: () => void, onOpen: (id: string) => v
   if (!active()) return;
   const register = async (token: string) => {
     if (!active()) return;
-    await api('/api/devices', { token, platform });
-    if (active()) pushToken = token;
+    await api('/api/devices', {
+      token,
+      platform,
+      sounds: loadPreferences(preferenceScope(userId)).sounds,
+    });
+    if (active()) {
+      pushToken = token;
+      pushUserId = userId;
+    }
   };
   const remember = async (pending: Promise<{ remove(): Promise<void> }>) => {
     const handle = await pending;
@@ -80,19 +84,21 @@ export function logoutPush() {
   void revokeSession(pushToken).catch(() => {});
   void stopPush();
   pushToken = undefined;
+  pushUserId = undefined;
   if (mobile) tokenCleanup = FirebaseMessaging.deleteToken().catch(() => {});
 }
-export async function addCalendar(event: GameEvent, userId: string) {
-  if (!mobile) return downloadCalendar(event.id);
-  await native.saveCalendar({
-    key: `${userId}:${event.id}`,
-    title: `${event.game} · ${event.title}`,
-    startMs: Date.parse(event.starts_at),
-    endMs: Date.parse(event.ends_at),
-    notes: event.notes,
-    location: event.location,
-  });
+export async function syncPushSounds() {
+  if (pushToken && pushUserId)
+    await api('/api/devices', {
+      token: pushToken,
+      platform,
+      sounds: loadPreferences(preferenceScope(pushUserId)).sounds,
+    });
 }
-export async function removeCalendar(event: GameEvent, userId: string) {
-  if (mobile) await native.removeCalendar({ key: `${userId}:${event.id}` });
+export async function disablePush() {
+  if (pushToken) await api('/api/devices/remove', { token: pushToken });
+  await stopPush();
+  await FirebaseMessaging.deleteToken();
+  pushToken = undefined;
+  pushUserId = undefined;
 }

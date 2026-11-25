@@ -1,4 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
+import type { SoundKind, SoundChoice } from './types';
 export const mobile = Capacitor.isNativePlatform();
 export const desktop = Boolean(window.partyup);
 export const platform = mobile ? Capacitor.getPlatform() : desktop ? 'windows' : 'preview';
@@ -6,15 +7,14 @@ export const native = registerPlugin<{
   getToken(): Promise<{ value?: string }>;
   setToken(options: { value: string }): Promise<void>;
   clearToken(): Promise<void>;
-  saveCalendar(options: {
-    key: string;
-    title: string;
-    startMs: number;
-    endMs: number;
-    notes: string;
-    location: string;
-  }): Promise<void>;
-  removeCalendar(options: { key: string }): Promise<void>;
+  setSound(options: {
+    scope: string;
+    kind: SoundKind;
+    name?: string;
+    dataUrl?: string;
+    reset?: boolean;
+  }): Promise<SoundChoice>;
+  previewSound(options: { scope: string; kind: SoundKind }): Promise<void>;
 }>('PartyNative');
 let token = '';
 let sessionVersion = 0;
@@ -132,16 +132,4 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
   } finally {
     requests.delete(controller);
   }
-}
-export async function downloadCalendar(id: string) {
-  const response = await fetch(`${serverUrl()}/api/events/${id}/calendar`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) throw new Error('Не удалось получить событие календаря');
-  const url = URL.createObjectURL(await response.blob());
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = 'partyup.ics';
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }

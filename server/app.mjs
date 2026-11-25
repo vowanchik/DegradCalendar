@@ -2,7 +2,6 @@ import { createServer } from 'node:http';
 import { randomBytes, randomUUID, createHash, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { createStore } from './store.mjs';
-import { calendarFile } from './calendar.mjs';
 const derive = promisify(scrypt);
 const iso = () => new Date().toISOString();
 const hash = (token) => createHash('sha256').update(token).digest('hex');
@@ -122,8 +121,19 @@ export function createApplication({
         'SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100',
         userId,
       ),
+      unreadCount: get(
+        'SELECT COUNT(*) count FROM notifications WHERE user_id=? AND is_read=0',
+        userId,
+      ).count,
       pushConfigured: Boolean(push),
       demo,
+      preferences: (() => {
+        const prefs = get('SELECT * FROM preferences WHERE user_id=?', userId);
+        return {
+          alarmEnabled: prefs ? Boolean(prefs.alarm_enabled) : true,
+          alarmMinutes: prefs?.alarm_minutes ?? 15,
+        };
+      })(),
     };
   }
   async function seed() {
@@ -219,9 +229,27 @@ export function createApplication({
     sending = true;
     try {
       for (const row of all(
-        'SELECT o.*,n.user_id,n.title,n.body,n.event_id FROM push_outbox o JOIN notifications n ON n.id=o.notification_id WHERE o.next_attempt<=? LIMIT 50',
+        'SELECT o.*,n.user_id,n.title,n.body,n.event_id,n.kind FROM push_outbox o JOIN notifications n ON n.id=o.notification_id WHERE o.next_attempt<=? LIMIT 50',
         Date.now(),
       )) {
+        if (row.kind === 'reminder') {
+          const current = get(
+            'SELECT e.cancelled,e.starts_at,p.status FROM events e JOIN participants p ON p.event_id=e.id WHERE e.id=? AND p.user_id=?',
+            row.event_id,
+            row.user_id,
+          );
+          const pref = get('SELECT alarm_enabled FROM preferences WHERE user_id=?', row.user_id);
+          if (
+            !current ||
+            current.cancelled ||
+            current.status !== 'accepted' ||
+            Date.parse(current.starts_at) <= Date.now() ||
+            pref?.alarm_enabled === 0
+          ) {
+            run('DELETE FROM push_outbox WHERE id=?', row.id);
+            continue;
+          }
+        }
         const tokens = all('SELECT token FROM devices WHERE user_id=?', row.user_id).map(
           (d) => d.token,
         );
@@ -235,6 +263,15 @@ export function createApplication({
             body: row.body,
             eventId: row.event_id || '',
             notificationId: row.notification_id,
+            kind: row.kind,
+            deviceSounds: Object.fromEntries(
+              tokens.map((token) => [
+                token,
+                JSON.parse(
+                  get('SELECT sounds FROM device_sounds WHERE token=?', token)?.sounds || '{}',
+                ),
+              ]),
+            ),
           });
           for (const token of dead || []) run('DELETE FROM devices WHERE token=?', token);
           run('DELETE FROM push_outbox WHERE id=?', row.id);
@@ -258,10 +295,13 @@ export function createApplication({
     const changed = [];
     transaction(() => {
       for (const event of all(
-        'SELECT e.*,p.user_id FROM events e JOIN participants p ON p.event_id=e.id WHERE e.cancelled=0 AND p.status=? AND e.starts_at>? AND e.starts_at<=?',
+        `SELECT e.*,p.user_id FROM events e JOIN participants p ON p.event_id=e.id
+         LEFT JOIN preferences pref ON pref.user_id=p.user_id
+         WHERE e.cancelled=0 AND p.status=? AND COALESCE(pref.alarm_enabled,1)=1
+         AND e.starts_at>? AND julianday(e.starts_at)<=julianday(?) + COALESCE(pref.alarm_minutes,15)/1440.0`,
         'accepted',
         new Date(now).toISOString(),
-        new Date(now + 15 * 60000).toISOString(),
+        new Date(now).toISOString(),
       )) {
         if (
           get(
@@ -421,6 +461,28 @@ export function createApplication({
         return;
       }
       if (req.method === 'GET' && path === '/api/state') return send(200, state(uid));
+      if (req.method === 'POST' && path === '/api/preferences') {
+        if (
+          typeof body.alarmEnabled !== 'boolean' ||
+          !Number.isInteger(body.alarmMinutes) ||
+          body.alarmMinutes < 1 ||
+          body.alarmMinutes > 10080
+        )
+          fail(400, 'Укажите включение будильника и время от 1 до 10080 минут');
+        run(
+          'INSERT INTO preferences(user_id,alarm_enabled,alarm_minutes) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET alarm_enabled=excluded.alarm_enabled,alarm_minutes=excluded.alarm_minutes',
+          uid,
+          Number(body.alarmEnabled),
+          body.alarmMinutes,
+        );
+        if (!body.alarmEnabled)
+          run(
+            "DELETE FROM push_outbox WHERE notification_id IN (SELECT id FROM notifications WHERE user_id=? AND kind='reminder')",
+            uid,
+          );
+        invalidate([uid]);
+        return send(200, { ok: true });
+      }
       if (req.method === 'POST' && path === '/api/auth/logout') {
         transaction(() => {
           run('DELETE FROM sessions WHERE hash=?', hash(token));
@@ -543,20 +605,11 @@ export function createApplication({
         invalidate([uid, ...guests]);
         return send(201, { id });
       }
-      match = path.match(/^\/api\/events\/([^/]+)\/(reply|cancel|messages|calendar)$/);
+      match = path.match(/^\/api\/events\/([^/]+)\/(reply|cancel|messages)$/);
       if (match) {
         const event = requireEvent(match[1], uid);
         const action = match[2];
         const userIds = members(event.id);
-        if (req.method === 'GET' && action === 'calendar') {
-          if (event.my_status !== 'accepted') fail(403, 'Сначала примите приглашение');
-          res.writeHead(200, {
-            'Content-Type': 'text/calendar; charset=utf-8',
-            'Content-Disposition': 'attachment; filename="partyup.ics"',
-          });
-          res.end(calendarFile(event, appOrigin));
-          return;
-        }
         if (req.method === 'GET' && action === 'messages')
           return send(
             200,
@@ -599,10 +652,12 @@ export function createApplication({
               );
               notify(
                 event.host_id,
-                body.status === 'accepted' ? 'Команда собирается!' : 'Изменение в команде',
-                `${get('SELECT name FROM users WHERE id=?', uid).name}: ${body.status === 'accepted' ? 'буду играть' : 'не смогу'} · ${event.game}`,
+                body.status === 'accepted'
+                  ? 'Команда собирается!'
+                  : 'Участник отказался от встречи',
+                `${get('SELECT name FROM users WHERE id=?', uid).name}: ${body.status === 'accepted' ? 'буду играть' : 'отказался от участия'} · ${event.game} · ${event.title}`,
                 event.id,
-                'reply',
+                body.status === 'accepted' ? 'reply' : 'decline',
               );
             });
           invalidate(userIds);
@@ -627,19 +682,66 @@ export function createApplication({
         }
       }
       if (req.method === 'POST' && path === '/api/notifications/read') {
-        run('UPDATE notifications SET is_read=1 WHERE user_id=?', uid);
+        if (body.id !== undefined) {
+          if (typeof body.id !== 'string') fail(400, 'Неверное уведомление');
+          run('UPDATE notifications SET is_read=1 WHERE user_id=? AND id=?', uid, body.id);
+        } else run('UPDATE notifications SET is_read=1 WHERE user_id=?', uid);
         invalidate([uid]);
         return send(200, { ok: true });
       }
       if (req.method === 'POST' && path === '/api/devices') {
         const deviceToken = text(body.token, 'Токен устройства', 10, 4096);
         if (!['android', 'ios'].includes(body.platform)) fail(400, 'Неизвестная платформа');
+        const sounds = {};
+        if (body.sounds !== undefined) {
+          if (!body.sounds || typeof body.sounds !== 'object' || Array.isArray(body.sounds))
+            fail(400, 'Некорректные звуки');
+          for (const kind of [
+            'invite',
+            'reply',
+            'decline',
+            'message',
+            'friend',
+            'cancel',
+            'reminder',
+          ]) {
+            const choice = body.sounds[kind];
+            if (!choice) continue;
+            if (
+              typeof choice !== 'object' ||
+              (choice.channelId !== undefined &&
+                !/^partyup-[a-z0-9-]{1,100}$/.test(choice.channelId)) ||
+              (choice.soundName !== undefined &&
+                !/^partyup-[a-z0-9-]{1,100}\.(wav|caf|aiff?)$/.test(choice.soundName))
+            )
+              fail(400, 'Некорректный звук уведомления');
+            sounds[kind] = {
+              ...(choice.channelId ? { channelId: choice.channelId } : {}),
+              ...(choice.soundName ? { soundName: choice.soundName } : {}),
+            };
+          }
+        }
+        transaction(() => {
+          run(
+            'INSERT INTO devices VALUES(?,?,?,?) ON CONFLICT(token) DO UPDATE SET user_id=excluded.user_id,platform=excluded.platform,updated_at=excluded.updated_at',
+            deviceToken,
+            uid,
+            body.platform,
+            iso(),
+          );
+          run(
+            'INSERT INTO device_sounds(token,sounds) VALUES(?,?) ON CONFLICT(token) DO UPDATE SET sounds=excluded.sounds',
+            deviceToken,
+            JSON.stringify(sounds),
+          );
+        });
+        return send(200, { ok: true });
+      }
+      if (req.method === 'POST' && path === '/api/devices/remove') {
         run(
-          'INSERT INTO devices VALUES(?,?,?,?) ON CONFLICT(token) DO UPDATE SET user_id=excluded.user_id,platform=excluded.platform,updated_at=excluded.updated_at',
-          deviceToken,
+          'DELETE FROM devices WHERE token=? AND user_id=?',
+          text(body.token, 'Токен устройства', 10, 4096),
           uid,
-          body.platform,
-          iso(),
         );
         return send(200, { ok: true });
       }

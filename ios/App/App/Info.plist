@@ -10,10 +10,6 @@
     </dict>
     <key>NSLocalNetworkUsageDescription</key>
     <string>PartyUp подключается к общему серверу друзей, в том числе по адресу в домашней сети.</string>
-    <key>NSCalendarsFullAccessUsageDescription</key>
-    <string>PartyUp добавляет принятые игровые встречи в календарь и удаляет их при отмене. Содержимое других событий не отправляется на сервер.</string>
-    <key>NSCalendarsUsageDescription</key>
-    <string>Сохранять игровые встречи в календарь и удалять отменённые встречи.</string>
     <key>FirebaseMessagingAutoInitEnabled</key>
     <false/>
     <key>UIBackgroundModes</key>
