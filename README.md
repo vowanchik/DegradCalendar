@@ -12,6 +12,14 @@
 
 Файл пока не подписан сертификатом издателя. Контрольная сумма SHA-256 опубликована рядом с `.exe` в `SHA256SUMS.txt`. Если репозиторий приватный, скачивание доступно только пользователям, которым владелец предоставил доступ.
 
+### Code signing policy
+
+Готовим заявку в SignPath Foundation; одобрение и подпись Windows ещё не получены. [Code signing policy](CODE_SIGNING_POLICY.md) описывает текущий статус, ответственного и план проверки сборок. [Privacy policy](PRIVACY.md) описывает обработку данных, внешние сервисы и настройки пользователя.
+
+## Лицензия
+
+Исходный код PartyUp распространяется по [лицензии MIT](LICENSE), Copyright (c) 2026 Vladimir Rozhnov. Сторонние компоненты сохраняют собственные лицензии.
+
 ## Скачать Android APK
 
 **[Скачать PartyUp 0.3.1 для Android 7.0+ (.apk)](https://github.com/vowanchik/DegradCalendar/releases/download/v0.3.1/PartyUp-0.3.1-Android.apk)**

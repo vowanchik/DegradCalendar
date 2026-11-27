@@ -2,6 +2,8 @@
   "name": "partyup",
   "version": "0.3.1",
   "private": true,
+  "license": "MIT",
+  "author": "Vladimir Rozhnov",
   "type": "module",
   "description": "Игровые вечера с друзьями — Windows, Android, iOS",
   "main": "desktop/main.cjs",
@@ -49,6 +51,7 @@
       "dist/**/*",
       "desktop/**/*",
       "package.json",
+      "LICENSE",
       "!node_modules/**/*"
     ],
     "npmRebuild": false,

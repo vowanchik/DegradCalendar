@@ -1,0 +1,65 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 11.25.0
+          run_install: false
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Test
+        run: pnpm test
+      - name: Build application
+        run: pnpm build
+      - name: Package unsigned Windows application
+        run: >-
+          pnpm exec electron-builder --win portable --x64 --publish never
+          '-c.forceCodeSigning=false'
+          '-c.win.signAndEditExecutable=true'
+          '-c.directories.output=release/ci-unsigned'
+          '-c.win.artifactName=PartyUp-${version}-Windows-Unsigned.${ext}'
+      - name: Verify metadata and create checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          $outer = "release/ci-unsigned/PartyUp-$version-Windows-Unsigned.exe"
+          $inner = 'release/ci-unsigned/win-unpacked/PartyUp.exe'
+          foreach ($file in @($outer, $inner)) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing executable: $file" }
+            $metadata = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path -LiteralPath $file).Path)
+            if ($metadata.ProductName -ne 'PartyUp') { throw "Unexpected product name: $file" }
+            if ($metadata.ProductVersion -notin @($version, "$version.0")) { throw "Unexpected product version: $file" }
+          }
+          $digest = (Get-FileHash -LiteralPath $outer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $assetName = [IO.Path]::GetFileName($outer)
+          "$digest  $assetName" | Set-Content -LiteralPath 'release/ci-unsigned/SHA256SUMS.txt' -Encoding utf8
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: PartyUp-Windows-unsigned-${{ github.sha }}
+          path: |
+            release/ci-unsigned/PartyUp-*-Windows-Unsigned.exe
+            release/ci-unsigned/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
