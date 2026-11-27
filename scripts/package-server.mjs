@@ -11,8 +11,12 @@ for (const file of [
   'pnpm-workspace.yaml',
   '.env.example',
   '.env.http.example',
+  'Start-Server.vbs',
+  'Stop-Server.vbs',
 ])
   copyFileSync(file, join(target, file));
 copyFileSync('scripts/backup.mjs', join(target, 'scripts/backup.mjs'));
+copyFileSync('scripts/server-windows.ps1', join(target, 'scripts/server-windows.ps1'));
 copyFileSync('docs/SERVER.md', join(target, 'SERVER.md'));
+copyFileSync('docs/MOBILE-PUSH.md', join(target, 'MOBILE-PUSH.md'));
 console.log(target);

@@ -1,5 +1,5 @@
 // Runs with Electron, in an isolated profile and with an in-memory API fixture.
-const { app, BrowserWindow, Tray } = require('electron');
+const { app, BrowserWindow, Tray, Notification } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -7,6 +7,10 @@ const profile = path.resolve(__dirname, '../test-results/desktop-smoke-profile')
 app.setPath('userData', profile);
 app.setName('PartyUp desktop smoke');
 let tooltip = '';
+const shown = [];
+Notification.prototype.show = function () {
+  shown.push(this.title);
+};
 const setToolTip = Tray.prototype.setToolTip;
 Tray.prototype.setToolTip = function (text) {
   tooltip = text;
@@ -165,6 +169,35 @@ app
       async () => (await main.webContents.executeJavaScript('window.qaOpened')) === event.id,
     );
     console.log('PASS: widget opens the selected invitation in the main window');
+    event.my_status = 'accepted';
+    event.participants = [
+      { id: 'fixture-user', status: 'accepted' },
+      { id: 'guest', status: 'pending' },
+    ];
+    const alarm = (id, title) => ({
+      id,
+      title,
+      body: 'Команда',
+      kind: 'reminder',
+      event_id: event.id,
+      is_read: 0,
+    });
+    state.notifications = [alarm('team-pending', 'Team pending')];
+    state.unreadCount = 144;
+    await waitFor(() => tooltip.includes('144'));
+    assert.equal(shown.includes('Team pending'), false);
+    event.participants[1].status = 'accepted';
+    state.notifications.push(alarm('team-ready', 'Team ready'));
+    state.unreadCount = 145;
+    await waitFor(() => shown.includes('Team ready'));
+    event.participants[1].status = 'declined';
+    state.notifications.push(alarm('team-declined', 'Team declined'));
+    state.unreadCount = 146;
+    await waitFor(() => tooltip.includes('146'));
+    assert.equal(shown.includes('Team declined'), false);
+    console.log(
+      'PASS: Windows reminders wait for the entire team and suppress stale alarms after another guest refuses',
+    );
     await invoke('disconnect');
     assert.equal(main.webContents.getZoomFactor(), 1);
     app.exit(0);

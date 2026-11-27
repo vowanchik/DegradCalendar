@@ -1669,11 +1669,20 @@ main {
 }
 .chat-input {
   display: flex;
+  align-items: flex-end;
+  flex-shrink: 0;
   gap: 9px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
 }
-.chat-input input {
+.chat-input textarea {
+  flex: 1;
+  min-width: 0;
+  max-height: 180px;
+  resize: none;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
   font-size: 0.8rem;
 }
 .chat-input .button {

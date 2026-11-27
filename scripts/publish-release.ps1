@@ -1,4 +1,4 @@
-param([string]$Version = '0.3.0')
+param([string]$Version = '0.3.1')
 $ErrorActionPreference = 'Stop'
 $env:GIT_TERMINAL_PROMPT = '0'
 $env:GCM_INTERACTIVE = 'never'

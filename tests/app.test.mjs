@@ -368,6 +368,7 @@ test('push uses per-device sounds and drops alarms after cancellation or refusal
       JSON.stringify({ reminder: { channelId: 'partyup-reminder-custom' } }),
     );
     const event = store.get('SELECT id FROM events WHERE host_id=?', 'demo-user');
+    store.run("UPDATE participants SET status='accepted' WHERE event_id=?", event.id);
     store.run(
       'UPDATE events SET starts_at=? WHERE id=?',
       new Date(Date.now() + 60000).toISOString(),

@@ -4,13 +4,18 @@ import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const expectedScript = readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8').match(
+  /src="\.\/assets\/([^"]+\.js)"/,
+)[1];
 const probe = createServer();
 probe.listen(0, '127.0.0.1');
 await once(probe, 'listening');
 const port = probe.address().port;
 await new Promise((resolve) => probe.close(resolve));
 const child = spawn(
-  resolve('release/PartyUp-0.3.0-Windows.exe'),
+  resolve(`release/PartyUp-${version}-Windows.exe`),
   [
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${resolve('test-results/packaged-smoke-profile')}`,
@@ -60,7 +65,7 @@ try {
   do {
     result = await page.call('Runtime.evaluate', {
       expression:
-        "JSON.stringify({url:location.href, bridge:Boolean(window.partyup), auth:Boolean(document.querySelector('.auth')), title:document.title})",
+        "JSON.stringify({url:location.href, bridge:Boolean(window.partyup), auth:Boolean(document.querySelector('.auth')), title:document.title, script:document.querySelector('script[type=module]')?.src})",
       returnByValue: true,
     });
     if (JSON.parse(result.result.value).auth) break;
@@ -71,6 +76,10 @@ try {
   assert.equal(state.bridge, true);
   assert.ok(state.url.includes('app.asar/dist/index.html'));
   assert.match(state.title, /PartyUp/);
+  assert.ok(
+    state.script.endsWith('/assets/' + expectedScript),
+    'EXE must contain the current production bundle',
+  );
   console.log(
     'PASS: portable EXE starts, loads packaged production UI and native bridge in an isolated profile',
   );

@@ -31,7 +31,7 @@ app
       );
     const input = (selector, value) =>
       js(
-        `(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) throw new Error('Missing input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(e, ${JSON.stringify(value)}); e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); })()`,
+        `(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) throw new Error('Missing input'); Object.getOwnPropertyDescriptor(e.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set.call(e, ${JSON.stringify(value)}); e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); })()`,
       );
     const snapshot = async (name) => {
       main.showInactive();
@@ -82,6 +82,58 @@ app
       "!document.querySelector('.reschedule-form') && document.querySelector('.detail-facts').textContent.includes('21:30')",
     );
     await snapshot('030-detail');
+    const shortHeight = await js(
+      "document.querySelector('.chat-input textarea').getBoundingClientRect().height",
+    );
+    const longMessage = 'Очень длинное сообщение для команды. '.repeat(18) + '\nВторая строка';
+    await input('.chat-input textarea', longMessage);
+    await wait(
+      `document.querySelector('.chat-input textarea').getBoundingClientRect().height > ${shortHeight + 20}`,
+    );
+    assert.ok(
+      await js(
+        "document.querySelector('.chat-input textarea').scrollWidth <= document.querySelector('.chat-input textarea').clientWidth",
+      ),
+    );
+    await snapshot('031-chat-draft');
+    // Shift+Enter must not submit; Enter submits and collapses the cleared composer.
+    await js(
+      "document.querySelector('.chat-input textarea').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', shiftKey:true, bubbles:true, cancelable:true}))",
+    );
+    assert.equal(await js("document.querySelector('.chat-input textarea').value"), longMessage);
+    await js(
+      "document.querySelector('.chat-input textarea').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}))",
+    );
+    await wait(
+      "document.querySelector('.chat-input textarea').value === '' && document.querySelectorAll('.message.own').length > 0",
+    );
+    assert.equal(
+      await js("[...document.querySelectorAll('.message.own p')].at(-1).textContent"),
+      longMessage,
+    );
+    await wait(
+      `document.querySelector('.chat-input textarea').getBoundingClientRect().height <= ${shortHeight + 2}`,
+    );
+    await snapshot('031-chat-sent');
+    main.webContents.setZoomFactor(1);
+    main.setMinimumSize(360, 620);
+    main.setSize(390, 844);
+    await input('.chat-input textarea', 'БезПробелов'.repeat(100));
+    await wait(
+      "document.querySelector('.chat-input textarea').getBoundingClientRect().height > 100",
+    );
+    assert.ok(
+      await js(
+        "document.querySelector('.chat-input textarea').scrollWidth <= document.querySelector('.chat-input textarea').clientWidth",
+      ),
+    );
+    assert.ok(await js('document.documentElement.scrollWidth <= window.innerWidth'));
+    await js("document.querySelector('.chat-input').scrollIntoView({block:'end'})");
+    await snapshot('031-chat-narrow');
+    main.setSize(1360, 900);
+    console.log(
+      'PASS: chat wraps and grows on desktop/mobile, sends multiline text, preserves Shift+Enter and resets after sending',
+    );
     await js("document.querySelector('button[aria-label=Закрыть]').click()");
     await js("document.querySelector('.inactive-filter input').click()");
     assert.equal(

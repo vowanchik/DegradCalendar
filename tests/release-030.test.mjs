@@ -73,6 +73,7 @@ test('reschedule is host-only, keeps chat, resets RSVP, clears old alarms and re
   const { app, request, host, guest } = await fixture();
   try {
     const event = app.store.get("SELECT * FROM events WHERE host_id='demo-user'");
+    app.store.run("UPDATE participants SET status='accepted' WHERE event_id=?", event.id);
     app.store.run(
       'UPDATE events SET starts_at=? WHERE id=?',
       new Date(Date.now() + 120000).toISOString(),
@@ -160,9 +161,19 @@ test('reschedule is host-only, keeps chat, resets RSVP, clears old alarms and re
         event.id,
         updated.version,
       ).n,
-      1,
+      0,
     );
     await request(`/api/events/${event.id}/reply`, guest, { status: 'accepted' });
+    app.remind();
+    assert.equal(
+      app.store.get(
+        'SELECT COUNT(*) n FROM reminders WHERE event_id=? AND version=?',
+        event.id,
+        updated.version,
+      ).n,
+      0,
+    );
+    app.store.run("UPDATE participants SET status='accepted' WHERE event_id=?", event.id);
     app.remind();
     app.remind();
     assert.equal(
@@ -171,7 +182,7 @@ test('reschedule is host-only, keeps chat, resets RSVP, clears old alarms and re
         event.id,
         updated.version,
       ).n,
-      2,
+      4,
     );
     await request(`/api/events/${event.id}/cancel`, host, {});
     assert.equal(

@@ -267,10 +267,15 @@ export function createApplication({
             row.user_id,
           );
           const pref = get('SELECT alarm_enabled FROM preferences WHERE user_id=?', row.user_id);
+          const unconfirmed = get(
+            "SELECT 1 FROM participants WHERE event_id=? AND status<>'accepted' LIMIT 1",
+            row.event_id,
+          );
           if (
             !current ||
             current.cancelled ||
             current.status !== 'accepted' ||
+            unconfirmed ||
             Date.parse(current.starts_at) <= Date.now() ||
             pref?.alarm_enabled === 0
           ) {
@@ -326,6 +331,7 @@ export function createApplication({
         `SELECT e.*,p.user_id FROM events e JOIN participants p ON p.event_id=e.id
          LEFT JOIN preferences pref ON pref.user_id=p.user_id
          WHERE e.cancelled=0 AND p.status=? AND COALESCE(pref.alarm_enabled,1)=1
+         AND NOT EXISTS (SELECT 1 FROM participants team WHERE team.event_id=e.id AND team.status<>'accepted')
          AND e.starts_at>? AND julianday(e.starts_at)<=julianday(?) + COALESCE(pref.alarm_minutes,15)/1440.0`,
         'accepted',
         new Date(now).toISOString(),

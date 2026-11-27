@@ -1290,7 +1290,21 @@ function EventDetail({
   const [editing, setEditing] = useState(false);
   const [editVersion, setEditVersion] = useState(event.version);
   const bottom = useRef<HTMLDivElement>(null);
+  const chatInput = useRef<HTMLTextAreaElement>(null);
   const count = useRef(0);
+  useEffect(() => {
+    const input = chatInput.current;
+    if (!input) return;
+    const resize = () => {
+      input.style.height = 'auto';
+      input.style.height = `${input.scrollHeight + input.offsetHeight - input.clientHeight}px`;
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    // Observe the container so wrapping also updates after resizing or changing zoom.
+    observer.observe(input.parentElement!);
+    return () => observer.disconnect();
+  }, [chat]);
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -1321,7 +1335,7 @@ function EventDetail({
   }, [messages.length]);
   async function send(e: FormEvent) {
     e.preventDefault();
-    if (!chat.trim()) return;
+    if (!chat.trim() || busy || event.cancelled || offline) return;
     setBusy(true);
     try {
       await api(`/api/events/${event.id}/messages`, { text: chat });
@@ -1573,12 +1587,21 @@ function EventDetail({
             </div>
           )}
           <form className="chat-input" onSubmit={send}>
-            <input
+            <textarea
+              ref={chatInput}
+              rows={1}
               aria-label="Сообщение команде"
+              aria-description="Enter — отправить, Shift+Enter — новая строка"
               placeholder={event.cancelled ? 'Встреча отменена' : 'Написать команде…'}
               value={chat}
               maxLength={1000}
               onChange={(e) => setChat(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }}
               disabled={Boolean(event.cancelled) || offline}
             />
             <button

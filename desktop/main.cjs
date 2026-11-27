@@ -332,6 +332,8 @@ async function poll(baseline = false) {
             event &&
             !event.cancelled &&
             event.my_status === 'accepted' &&
+            event.participants?.length > 0 &&
+            event.participants.every((participant) => participant.status === 'accepted') &&
             Date.parse(event.starts_at) > Date.now())
         )
           void notification({
